@@ -1,92 +1,128 @@
-// This file will be populated with your database schema
-// You can run the introspect command to generate schema from your existing database
-// or manually define your schema here
+// src/db/schema.ts
+import { pgTable, serial, text, timestamp, varchar, pgEnum, integer, boolean, unique } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
 
-import { pgTable, serial, text, timestamp, varchar, pgEnum, integer, boolean } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+// --- Enums (Matching SQL Definitions) ---
+export const ticketStatusEnum = pgEnum('ticket_status_enum', ['new', 'open', 'in_progress', 'pending_customer', 'closed']);
+export const ticketPriorityEnum = pgEnum('ticket_priority_enum', ['low', 'medium', 'high', 'urgent']);
+export const userRoleEnum = pgEnum('user_role', ['admin', 'manager', 'user']); // General access role
+export const ticketingRoleEnum = pgEnum('ticketing_role_enum', ['Admin', 'Project Manager', 'Developer', 'Submitter', 'Viewer', 'Other']); // Specific permissions for staff
 
-// Enums
-export const priorityEnum = pgEnum('priority', ['low', 'medium', 'high']);
-export const statusEnum = pgEnum('status', ['open', 'in_progress', 'resolved', 'closed']);
+// New Enum for E-commerce Ticket Types
+export const ticketTypeEcommerceEnum = pgEnum('ticket_type_ecommerce_enum', [
+    'Return',
+    'Shipping Issue',
+    'Order Issue',
+    'New Order',
+    'Credit Request',
+    'COA Request',
+    'COC Request',
+    'SDS Request',
+    'Quote Request',
+    'General Inquiry'
+    // Add 'Other' if needed as a fallback
+]);
 
-// Users table
+// --- Tables ---
+
 export const users = pgTable('users', {
   id: serial('id').primaryKey(),
-  name: varchar('name', { length: 255 }).notNull(),
   email: varchar('email', { length: 255 }).notNull().unique(),
-  password: varchar('password', { length: 255 }).notNull(),
-  role: varchar('role', { length: 50 }).notNull().default('user'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
+  password: varchar('password', { length: 255 }).notNull(), // REMEMBER TO HASH
+  name: varchar('name', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow(), // Use defaultNow() for consistency
+  role: userRoleEnum('role').default('user').notNull(),
+  emailVerified: timestamp('email_verified'),
+  resetToken: varchar('reset_token', { length: 255 }),
+  resetTokenExpiry: timestamp('reset_token_expiry'),
+  ticketingRole: ticketingRoleEnum('ticketing_role'), // Nullable for non-staff/customers
+  // Add updatedAt for good practice, even if not in original SQL
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Projects table
+// Projects table (needed for API)
 export const projects = pgTable('projects', {
   id: serial('id').primaryKey(),
-  name: varchar('name', { length: 255 }).notNull(),
+  name: varchar('name', { length: 255 }).notNull().unique(),
   description: text('description'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Tickets table
 export const tickets = pgTable('tickets', {
   id: serial('id').primaryKey(),
-  title: text('title').notNull(),
-  description: text('description').notNull(),
-  status: text('status', { enum: statusEnum.enumValues }).notNull().default(statusEnum.enumValues[0]),
-  priority: text('priority', { enum: priorityEnum.enumValues }).notNull().default(priorityEnum.enumValues[1]),
-  projectId: integer('project_id').references(() => projects.id).notNull(),
-  assigneeId: integer('assignee_id').references(() => users.id),
-  reporterId: integer('reporter_id').references(() => users.id).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-  // Email-related fields for tickets created from emails
-  senderEmail: text('sender_email'),
-  senderName: text('sender_name'),
-  externalMessageId: text('external_message_id'),
+  // displayId: varchar('display_id', { length: 10 }).notNull().unique(), // Keep if your app uses this separate ID
+  title: varchar('title', { length: 255 }).notNull(),
+  description: text('description'), // Nullable based on SQL
+  status: ticketStatusEnum('status').default('new').notNull(),
+  priority: ticketPriorityEnum('priority').default('medium').notNull(),
+  type: ticketTypeEcommerceEnum('type'), // Using the new enum, nullable
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  assigneeId: integer('assignee_id').references(() => users.id, { onDelete: 'set null' }),
+  reporterId: integer('reporter_id').notNull().references(() => users.id, { onDelete: 'set null' }), // Kept notNull, adjust if needed
+  projectId: integer('project_id').references(() => projects.id, { onDelete: 'set null' }), // References projects table
+  // --- E-commerce specific fields ---
+  orderNumber: varchar('order_number', { length: 255 }), // Added
+  trackingNumber: varchar('tracking_number', { length: 255 }), // Added
+  // --- Email processing fields ---
+  senderEmail: varchar('sender_email', { length: 255 }), // Made nullable
+  senderName: varchar('sender_name', { length: 255 }),
+  externalMessageId: varchar('external_message_id', { length: 255 }).unique(),
+  // customerId: integer('customer_id'), // Removed, assuming reporterId covers customer link via users table for now
+}, (table) => {
+  return {
+    // Re-declare unique constraints if needed, Drizzle might infer them from .unique() on column
+    // displayIdKey: unique('tickets_ticket_id_key').on(table.displayId), // Only if using displayId
+    externalMessageIdKey: unique('tickets_mailgun_message_id_key').on(table.externalMessageId), // Use constraint name from SQL
+    // Add indexes explicitly if Drizzle doesn't automatically create sufficient ones
+    // statusIdx: index("idx_tickets_status").on(table.status),
+    // priorityIdx: index("idx_tickets_priority").on(table.priority),
+    // assigneeIdx: index("idx_tickets_assignee_id").on(table.assigneeId),
+    // reporterIdx: index("idx_tickets_reporter_id").on(table.reporterId),
+  };
 });
 
-// Ticket comments table
 export const ticketComments = pgTable('ticket_comments', {
   id: serial('id').primaryKey(),
-  content: text('content').notNull(),
-  ticketId: integer('ticket_id').notNull().references(() => tickets.id),
-  commenterId: integer('commenter_id').notNull().references(() => users.id),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  ticketId: integer('ticket_id').notNull().references(() => tickets.id, { onDelete: 'cascade' }),
+  commentText: text('comment_text').notNull(), // Matching SQL column name
+  commenterId: integer('commenter_id').references(() => users.id, { onDelete: 'set null' }), // Nullable based on SQL FK
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  // Add updatedAt if you want to track comment edits
+  // updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  isFromCustomer: boolean('is_from_customer').default(false).notNull(),
+  isInternalNote: boolean('is_internal_note').default(false).notNull(),
+  externalMessageId: varchar('external_message_id', { length: 255 }).unique(), // Added unique constraint
+}, (table) => {
+  return {
+    // Explicitly defining unique constraint name from SQL
+    externalMessageIdKey: unique('ticket_comments_mailgun_message_id_key').on(table.externalMessageId),
+    // Add indexes explicitly if needed
+    // ticketIdx: index("idx_ticket_comments_ticket_id").on(table.ticketId),
+    // commenterIdx: index("idx_ticket_comments_commenter_id").on(table.commenterId),
+  };
 });
 
-// Products table (for e-commerce part)
-export const products = pgTable('products', {
-  id: serial('id').primaryKey(),
-  name: varchar('name', { length: 255 }).notNull(),
-  description: text('description'),
-  price: integer('price').notNull(), // Price in cents
-  active: boolean('active').notNull().default(true),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+export const subscriptions = pgTable('subscriptions', {
+  id: text('id').primaryKey().notNull(),
+  resource: text('resource').notNull(),
+  expirationDatetime: timestamp('expiration_datetime').notNull(), // Use correct name from SQL
+  clientState: text('client_state'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// Product variants table
-export const variants = pgTable('variants', {
-  id: serial('id').primaryKey(),
-  productId: integer('product_id').notNull().references(() => products.id),
-  name: varchar('name', { length: 255 }).notNull(),
-  sku: varchar('sku', { length: 100 }).notNull().unique(),
-  price: integer('price'), // Optional override of base product price
-  stock: integer('stock').notNull().default(0),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
 
-// === Drizzle Relations ===
+// --- Relations ---
+
 export const usersRelations = relations(users, ({ many }) => ({
-  assignedTickets: many(tickets, { relationName: 'assignedTickets' }),
-  reportedTickets: many(tickets, { relationName: 'reportedTickets' }),
-  comments: many(ticketComments, { relationName: 'commenterComments' }), // Explicit relation name
+  assignedTickets: many(tickets, { relationName: 'TicketAssignee' }),
+  reportedTickets: many(tickets, { relationName: 'TicketReporter' }),
+  comments: many(ticketComments, { relationName: 'UserComments' }),
 }));
 
+// Projects relations
 export const projectsRelations = relations(projects, ({ many }) => ({
   tickets: many(tickets),
 }));
@@ -99,12 +135,12 @@ export const ticketsRelations = relations(tickets, ({ one, many }) => ({
   assignee: one(users, {
     fields: [tickets.assigneeId],
     references: [users.id],
-    relationName: 'assignedTickets' // Match name in usersRelations
+    relationName: 'TicketAssignee',
   }),
   reporter: one(users, {
     fields: [tickets.reporterId],
     references: [users.id],
-    relationName: 'reportedTickets' // Match name in usersRelations
+    relationName: 'TicketReporter',
   }),
   comments: many(ticketComments),
 }));
@@ -117,17 +153,8 @@ export const ticketCommentsRelations = relations(ticketComments, ({ one }) => ({
   commenter: one(users, {
     fields: [ticketComments.commenterId],
     references: [users.id],
-    relationName: 'commenterComments' // Match name in usersRelations
+    relationName: 'UserComments',
   }),
 }));
 
-export const productsRelations = relations(products, ({ many }) => ({
-  variants: many(variants),
-}));
-
-export const variantsRelations = relations(variants, ({ one }) => ({
-  product: one(products, {
-    fields: [variants.productId],
-    references: [products.id],
-  }),
-})); 
+// No relations needed for subscriptions table in this context

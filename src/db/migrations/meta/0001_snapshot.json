@@ -1,6 +1,6 @@
 {
-  "id": "18f13573-8504-43fa-a9c2-69f18374b480",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "938cf320-b777-4482-9385-a2cd4a0901d8",
+  "prevId": "18f13573-8504-43fa-a9c2-69f18374b480",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -65,15 +65,15 @@
           "primaryKey": true,
           "notNull": true
         },
-        "comment_text": {
-          "name": "comment_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "ticket_id": {
           "name": "ticket_id",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "comment_text": {
+          "name": "comment_text",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -144,6 +144,13 @@
       "uniqueConstraints": {
         "ticket_comments_external_message_id_unique": {
           "name": "ticket_comments_external_message_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "external_message_id"
+          ]
+        },
+        "ticket_comments_mailgun_message_id_key": {
+          "name": "ticket_comments_mailgun_message_id_key",
           "nullsNotDistinct": false,
           "columns": [
             "external_message_id"
@@ -223,7 +230,7 @@
           "name": "reporter_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "order_number": {
           "name": "order_number",
@@ -289,6 +296,13 @@
       "uniqueConstraints": {
         "tickets_external_message_id_unique": {
           "name": "tickets_external_message_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "external_message_id"
+          ]
+        },
+        "tickets_mailgun_message_id_key": {
+          "name": "tickets_mailgun_message_id_key",
           "nullsNotDistinct": false,
           "columns": [
             "external_message_id"
@@ -366,6 +380,13 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         }
       },
       "indexes": {},

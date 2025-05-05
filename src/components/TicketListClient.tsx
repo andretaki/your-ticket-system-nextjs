@@ -27,7 +27,12 @@ interface DisplayTicketInternal extends Omit<TicketListEntry, 'createdAt' | 'upd
     updatedAt: Date;
 }
 
-export default function TicketListClient() {
+interface TicketListClientProps {
+  limit?: number;
+  showSearch?: boolean;
+}
+
+export default function TicketListClient({ limit, showSearch = true }: TicketListClientProps) {
   const [tickets, setTickets] = useState<TicketListEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,14 +42,21 @@ export default function TicketListClient() {
     setError(null);
     try {
       const res = await axios.get<TicketListEntry[]>('/api/tickets');
-      setTickets(res.data);
+      let filteredTickets = res.data;
+      
+      // Apply limit if provided
+      if (limit && limit > 0) {
+        filteredTickets = filteredTickets.slice(0, limit);
+      }
+      
+      setTickets(filteredTickets);
     } catch (err) {
       console.error('Error fetching tickets:', err);
       setError('Failed to load tickets.');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [limit]);
 
   useEffect(() => {
     fetchTickets();
@@ -75,10 +87,12 @@ export default function TicketListClient() {
   return (
     <div className="card shadow-sm"> {/* Add subtle shadow */}
       <div className="card-header bg-light d-flex justify-content-between align-items-center">
-        <h3 className="mb-0 h5">All Tickets</h3> {/* Adjusted heading size */}
-        <Link href="/tickets/create" className="btn btn-success btn-sm"> {/* Smaller button */}
-          <i className="fas fa-plus me-1"></i> Create New Ticket
-        </Link>
+        <h3 className="mb-0 h5">{limit ? 'Recent Tickets' : 'All Tickets'}</h3> {/* Adjusted heading size */}
+        {showSearch && (
+          <Link href="/tickets/create" className="btn btn-success btn-sm"> {/* Smaller button */}
+            <i className="fas fa-plus me-1"></i> Create New Ticket
+          </Link>
+        )}
       </div>
       <div className="card-body">
         {error && <div className="alert alert-danger alert-dismissible fade show">{error} <button type="button" className="btn-close" onClick={() => setError(null)} aria-label="Close"></button></div>}

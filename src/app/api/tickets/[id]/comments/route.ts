@@ -74,7 +74,7 @@ export async function POST(
     // Create the comment
     const [newComment] = await db.insert(ticketComments)
       .values({
-        content,
+        commentText: content,
         ticketId,
         commenterId,
       })
