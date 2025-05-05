@@ -3,9 +3,8 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
-}
-
-@theme inline {
+  
+  /* Replacing @theme with root-level variables */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -23,4 +22,72 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+i {
+  margin-right: 5px;
+}
+
+td {
+  max-width: 250px;
+}
+
+.navbar {
+  padding: 15px 10px;
+  background: #fff;
+  margin-bottom: 40px;
+  box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.nav-link {
+  outline: none;
+}
+
+/* ---------------------------------------------------
+  SIDEBAR STYLE
+----------------------------------------------------- */
+
+.wrapper {
+  display: flex;
+  width: 100%;
+  align-items: stretch;
+}
+
+.sidebar {
+  box-shadow: 1px 0 3px rgba(0, 0, 0, .1);
+}
+
+.sidebar .nav-link{
+  color: #aaa;
+  transition: 0.3s all;
+}
+
+.sidebar .nav-link.active {
+  color: #000;
+}
+
+.sidebar .nav-link:hover{
+  color: #000;
+}
+
+/* ---------------------------------------------------
+  CONTENT STYLE
+----------------------------------------------------- */
+
+#content {
+  width: 100%;
+  padding: 20px;
+  min-height: 100vh;
+}
+
+.low-priority {
+  color: green;
+}
+
+.med-priority {
+  color: darkgoldenrod;
+}
+
+.high-priority {
+  color: red;
 }
