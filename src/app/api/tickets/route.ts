@@ -1,7 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import { db } from '@/db';
-import { tickets, users, projects, priorityEnum, statusEnum } from '@/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { tickets, users, projects, ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
+import { eq, desc, asc, and, or, ilike, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
 // --- Zod Schema for Validation ---
@@ -10,51 +10,143 @@ const createTicketSchema = z.object({
   description: z.string().min(1, { message: "Description is required" }),
   projectName: z.string().min(1, { message: "Project name is required" }),
   assigneeEmail: z.string().email().nullable().optional(), // Optional assignee
-  priority: z.enum(priorityEnum.enumValues).optional().default(priorityEnum.enumValues[1]), // Default medium
-  status: z.enum(statusEnum.enumValues).optional().default(statusEnum.enumValues[0]), // Default open
+  priority: z.enum(ticketPriorityEnum.enumValues).optional().default(ticketPriorityEnum.enumValues[1]), // Default medium
+  status: z.enum(ticketStatusEnum.enumValues).optional().default(ticketStatusEnum.enumValues[0]), // Default open
   // Email-related fields for tickets created from emails
   senderEmail: z.string().email().optional(),
   senderName: z.string().optional(),
   externalMessageId: z.string().optional(),
 });
 
-// --- GET: Fetch all tickets ---
-export async function GET() {
+// --- GET: Fetch tickets with filtering and sorting ---
+export async function GET(request: NextRequest) {
   try {
-    const allTickets = await db.query.tickets.findMany({
-      columns: { // Select specific columns to optimize payload
+    const { searchParams } = new URL(request.url);
+
+    // --- Extract Filters ---
+    const statusFilter = searchParams.get('status');
+    const priorityFilter = searchParams.get('priority');
+    const projectIdFilter = searchParams.get('projectId'); // Filter by project ID
+    const assigneeIdFilter = searchParams.get('assigneeId'); // Filter by assignee ID
+    const searchTerm = searchParams.get('search');
+
+    // --- Extract Sorting ---
+    const sortBy = searchParams.get('sortBy') || 'createdAt'; // Default sort
+    const sortOrder = searchParams.get('sortOrder') === 'asc' ? 'asc' : 'desc'; // Default desc
+
+    // --- Build Where Clause Dynamically ---
+    const conditions = [];
+    if (statusFilter && ticketStatusEnum.enumValues.includes(statusFilter as any)) {
+      conditions.push(eq(tickets.status, statusFilter as typeof ticketStatusEnum.enumValues[number]));
+    }
+    if (priorityFilter && ticketPriorityEnum.enumValues.includes(priorityFilter as any)) {
+      conditions.push(eq(tickets.priority, priorityFilter as typeof ticketPriorityEnum.enumValues[number]));
+    }
+    if (projectIdFilter && !isNaN(parseInt(projectIdFilter))) {
+      conditions.push(eq(tickets.projectId, parseInt(projectIdFilter)));
+    }
+    if (assigneeIdFilter) {
+      if (assigneeIdFilter === 'unassigned') {
+        conditions.push(sql`${tickets.assigneeId} is null`);
+      } else if (!isNaN(parseInt(assigneeIdFilter))) {
+        conditions.push(eq(tickets.assigneeId, parseInt(assigneeIdFilter)));
+      }
+    }
+    if (searchTerm) {
+      const term = `%${searchTerm}%`;
+      conditions.push(
+        or(
+          ilike(tickets.title, term),
+          ilike(sql`COALESCE(${tickets.description}, '')`, term),
+          ilike(sql`COALESCE(${tickets.senderEmail}, '')`, term),
+          ilike(sql`COALESCE(${tickets.orderNumber}, '')`, term)
+        )
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // --- Build OrderBy Clause ---
+    let orderByClause;
+    const orderDirection = sortOrder === 'asc' ? asc : desc;
+
+    switch (sortBy) {
+      case 'title':
+        orderByClause = [orderDirection(tickets.title)];
+        break;
+      case 'status':
+        orderByClause = [orderDirection(tickets.status)];
+        break;
+      case 'priority':
+        orderByClause = [orderDirection(tickets.priority)];
+        break;
+      case 'project':
+        // Sorting by project requires a join, so we'll sort by project ID as a fallback
+        orderByClause = [orderDirection(tickets.projectId)];
+        break;
+      case 'assignee':
+        // Sorting by assignee requires a join, so we'll sort by assignee ID as a fallback
+        orderByClause = [orderDirection(tickets.assigneeId)];
+        break;
+      case 'updatedAt':
+        orderByClause = [orderDirection(tickets.updatedAt)];
+        break;
+      case 'createdAt':
+      default:
+        orderByClause = [desc(tickets.createdAt)]; // Default sort by newest created
+    }
+
+    // --- Fetch Data ---
+    const filteredTickets = await db.query.tickets.findMany({
+      where: whereClause,
+      orderBy: orderByClause,
+      columns: {
         id: true,
         title: true,
         status: true,
         priority: true,
         createdAt: true,
         updatedAt: true,
-        senderEmail: true, // Include sender details
+        senderEmail: true,
         senderName: true,
-        externalMessageId: true, // Include to check if ticket was created from email
+        externalMessageId: true,
+        description: true, // Include description for search
+        orderNumber: true, // Include order number for search
+        trackingNumber: true,
+        assigneeId: true, // Needed for filtering
+        projectId: true, // Needed for filtering
+        type: true, // Include ticket type
       },
       with: {
-        project: { columns: { name: true } },
-        assignee: { columns: { name: true } },
-        reporter: { columns: { name: true } } // Assuming reporter relation exists
+        project: { columns: { id: true, name: true } },
+        assignee: { columns: { id: true, name: true, email: true } },
+        reporter: { columns: { id: true, name: true, email: true } }
       },
-      orderBy: [desc(tickets.createdAt)]
     });
 
-    // Flatten the structure slightly for easier frontend consumption
-    const responseData = allTickets.map(t => ({
+    // --- Format Response ---
+    const responseData = filteredTickets.map(t => ({
       id: t.id,
       title: t.title,
       status: t.status,
       priority: t.priority,
-      createdAt: t.createdAt,
-      updatedAt: t.updatedAt,
+      type: t.type,
+      createdAt: t.createdAt.toISOString(), // Send as ISO string
+      updatedAt: t.updatedAt.toISOString(),
       projectName: t.project?.name ?? 'N/A',
+      projectId: t.project?.id,
       assigneeName: t.assignee?.name ?? 'Unassigned',
+      assigneeId: t.assignee?.id,
+      assigneeEmail: t.assignee?.email,
       reporterName: t.reporter?.name ?? 'Unknown',
-      senderEmail: t.senderEmail, // Include sender email if available
-      senderName: t.senderName,   // Include sender name if available
-      isFromEmail: Boolean(t.externalMessageId), // Flag if ticket was created from email
+      reporterId: t.reporter?.id,
+      reporterEmail: t.reporter?.email,
+      senderEmail: t.senderEmail,
+      senderName: t.senderName,
+      description: t.description,
+      isFromEmail: Boolean(t.externalMessageId),
+      orderNumber: t.orderNumber,
+      trackingNumber: t.trackingNumber,
     }));
 
     return NextResponse.json(responseData);
@@ -124,9 +216,9 @@ export async function POST(request: Request) {
       reporterId,
       priority, // Uses validated default if not provided
       status, // Uses validated default if not provided
-      senderEmail: senderEmail ?? null,
-      senderName: senderName ?? null,
-      externalMessageId: externalMessageId ?? null,
+      senderEmail: senderEmail || null,
+      senderName: senderName || null,
+      externalMessageId: externalMessageId || null,
     }).returning();
 
     console.log(`API Info [POST /api/tickets]: Ticket ${newTicket.id} created successfully.`);
