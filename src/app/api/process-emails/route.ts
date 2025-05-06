@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import * as graphService from '@/lib/graphService';
 import { db } from '@/db';
-import { users, tickets, projects, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum } from '@/db/schema';
+import { users, tickets, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { Message } from '@microsoft/microsoft-graph-types';
 import { analyzeEmailContent } from '@/lib/aiService'; // Import the AI service
@@ -9,7 +9,6 @@ import { analyzeEmailContent } from '@/lib/aiService'; // Import the AI service
 // Configuration (Consider moving to a config file or ENV vars)
 const PROCESSED_FOLDER_NAME = process.env.PROCESSED_FOLDER_NAME || "Processed";
 const ERROR_FOLDER_NAME = process.env.ERROR_FOLDER_NAME || "Error";
-const DEFAULT_PROJECT_NAME = process.env.DEFAULT_PROJECT_NAME || "Inbox Triage"; // Project for uncategorized tickets
 const DEFAULT_PRIORITY = ticketPriorityEnum.enumValues[1]; // 'medium'
 const DEFAULT_STATUS = ticketStatusEnum.enumValues[0]; // 'new'
 const DEFAULT_TYPE = 'General Inquiry' as typeof ticketTypeEcommerceEnum.enumValues[number];
@@ -48,29 +47,6 @@ async function findOrCreateUser(senderEmail: string, senderName?: string | null)
     }
 }
 
-// Helper to find the default project ID
-async function getDefaultProjectId(): Promise<number | null> {
-     try {
-        const project = await db.query.projects.findFirst({
-            where: eq(projects.name, DEFAULT_PROJECT_NAME),
-            columns: { id: true }
-        });
-        if (!project) {
-            // Optionally create the default project if it doesn't exist
-            console.warn(`Email processing: Default project "${DEFAULT_PROJECT_NAME}" not found. Creating...`);
-            const [newProject] = await db.insert(projects).values({ 
-                name: DEFAULT_PROJECT_NAME, 
-                description: "Default project for tickets created from email." 
-            }).returning({ id: projects.id });
-            return newProject.id;
-        }
-        return project.id;
-    } catch (error) {
-        console.error(`Email processing: Error finding/creating default project:`, error);
-        return null;
-    }
-}
-
 // --- POST Endpoint to Trigger Processing ---
 // NOTE: In production, this should ideally be a secure endpoint or a scheduled task, not a public POST.
 export async function POST(request: Request) {
@@ -81,18 +57,13 @@ export async function POST(request: Request) {
 
     let processedFolderId: string | null = null;
     let errorFolderId: string | null = null;
-    let defaultProjectId: number | null = null;
 
-    // --- Pre-computation: Folder IDs and Default Project ID ---
+    // --- Pre-computation: Folder IDs ---
     try {
         processedFolderId = await graphService.createFolderIfNotExists(PROCESSED_FOLDER_NAME);
         errorFolderId = await graphService.createFolderIfNotExists(ERROR_FOLDER_NAME);
-        defaultProjectId = await getDefaultProjectId();
-        if (!defaultProjectId) {
-            throw new Error(`Could not find or create the default project "${DEFAULT_PROJECT_NAME}".`);
-        }
     } catch (setupError: any) {
-        console.error("API Error: Failed during setup (folders/project):", setupError);
+        console.error("API Error: Failed during setup (folders):", setupError);
         return NextResponse.json({ error: `Setup failed: ${setupError.message}` }, { status: 500 });
     }
 
@@ -172,7 +143,6 @@ export async function POST(request: Request) {
             ticketData = {
                 title: aiAnalysis?.summary?.substring(0, 255) || subject.substring(0, 255), // Use AI summary or fallback to subject
                 description: emailBody, // Use the extracted body
-                projectId: defaultProjectId,
                 reporterId: reporterId,
                 priority: aiAnalysis?.prioritySuggestion || DEFAULT_PRIORITY, // Use AI suggestion or default
                 status: DEFAULT_STATUS,

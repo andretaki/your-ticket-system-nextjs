@@ -1,12 +1,12 @@
 {
-  "id": "18f13573-8504-43fa-a9c2-69f18374b480",
+  "id": "a196fe6b-c010-4f90-983f-1bc1fe441799",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.subscriptions": {
+    "ticketing_prod.subscriptions": {
       "name": "subscriptions",
-      "schema": "",
+      "schema": "ticketing_prod",
       "columns": {
         "id": {
           "name": "id",
@@ -55,9 +55,9 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.ticket_comments": {
+    "ticketing_prod.ticket_comments": {
       "name": "ticket_comments",
-      "schema": "",
+      "schema": "ticketing_prod",
       "columns": {
         "id": {
           "name": "id",
@@ -65,15 +65,15 @@
           "primaryKey": true,
           "notNull": true
         },
-        "comment_text": {
-          "name": "comment_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "ticket_id": {
           "name": "ticket_id",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "comment_text": {
+          "name": "comment_text",
+          "type": "text",
           "primaryKey": false,
           "notNull": true
         },
@@ -104,6 +104,13 @@
           "notNull": true,
           "default": false
         },
+        "is_outgoing_reply": {
+          "name": "is_outgoing_reply",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "external_message_id": {
           "name": "external_message_id",
           "type": "varchar(255)",
@@ -117,6 +124,7 @@
           "name": "ticket_comments_ticket_id_tickets_id_fk",
           "tableFrom": "ticket_comments",
           "tableTo": "tickets",
+          "schemaTo": "ticketing_prod",
           "columnsFrom": [
             "ticket_id"
           ],
@@ -130,6 +138,7 @@
           "name": "ticket_comments_commenter_id_users_id_fk",
           "tableFrom": "ticket_comments",
           "tableTo": "users",
+          "schemaTo": "ticketing_prod",
           "columnsFrom": [
             "commenter_id"
           ],
@@ -148,15 +157,22 @@
           "columns": [
             "external_message_id"
           ]
+        },
+        "ticket_comments_mailgun_message_id_key": {
+          "name": "ticket_comments_mailgun_message_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "external_message_id"
+          ]
         }
       },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.tickets": {
+    "ticketing_prod.tickets": {
       "name": "tickets",
-      "schema": "",
+      "schema": "ticketing_prod",
       "columns": {
         "id": {
           "name": "id",
@@ -179,7 +195,7 @@
         "status": {
           "name": "status",
           "type": "ticket_status_enum",
-          "typeSchema": "public",
+          "typeSchema": "ticketing_prod",
           "primaryKey": false,
           "notNull": true,
           "default": "'new'"
@@ -187,7 +203,7 @@
         "priority": {
           "name": "priority",
           "type": "ticket_priority_enum",
-          "typeSchema": "public",
+          "typeSchema": "ticketing_prod",
           "primaryKey": false,
           "notNull": true,
           "default": "'medium'"
@@ -195,7 +211,7 @@
         "type": {
           "name": "type",
           "type": "ticket_type_ecommerce_enum",
-          "typeSchema": "public",
+          "typeSchema": "ticketing_prod",
           "primaryKey": false,
           "notNull": false
         },
@@ -223,7 +239,7 @@
           "name": "reporter_id",
           "type": "integer",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "order_number": {
           "name": "order_number",
@@ -262,6 +278,7 @@
           "name": "tickets_assignee_id_users_id_fk",
           "tableFrom": "tickets",
           "tableTo": "users",
+          "schemaTo": "ticketing_prod",
           "columnsFrom": [
             "assignee_id"
           ],
@@ -275,6 +292,7 @@
           "name": "tickets_reporter_id_users_id_fk",
           "tableFrom": "tickets",
           "tableTo": "users",
+          "schemaTo": "ticketing_prod",
           "columnsFrom": [
             "reporter_id"
           ],
@@ -293,15 +311,22 @@
           "columns": [
             "external_message_id"
           ]
+        },
+        "tickets_mailgun_message_id_key": {
+          "name": "tickets_mailgun_message_id_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "external_message_id"
+          ]
         }
       },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.users": {
+    "ticketing_prod.users": {
       "name": "users",
-      "schema": "",
+      "schema": "ticketing_prod",
       "columns": {
         "id": {
           "name": "id",
@@ -319,7 +344,7 @@
           "name": "password",
           "type": "varchar(255)",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "name": {
           "name": "name",
@@ -337,7 +362,7 @@
         "role": {
           "name": "role",
           "type": "user_role",
-          "typeSchema": "public",
+          "typeSchema": "ticketing_prod",
           "primaryKey": false,
           "notNull": true,
           "default": "'user'"
@@ -363,9 +388,23 @@
         "ticketing_role": {
           "name": "ticketing_role",
           "type": "ticketing_role_enum",
-          "typeSchema": "public",
+          "typeSchema": "ticketing_prod",
           "primaryKey": false,
           "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "is_external": {
+          "name": "is_external",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         }
       },
       "indexes": {},
@@ -386,9 +425,9 @@
     }
   },
   "enums": {
-    "public.ticket_priority_enum": {
+    "ticketing_prod.ticket_priority_enum": {
       "name": "ticket_priority_enum",
-      "schema": "public",
+      "schema": "ticketing_prod",
       "values": [
         "low",
         "medium",
@@ -396,9 +435,9 @@
         "urgent"
       ]
     },
-    "public.ticket_status_enum": {
+    "ticketing_prod.ticket_status_enum": {
       "name": "ticket_status_enum",
-      "schema": "public",
+      "schema": "ticketing_prod",
       "values": [
         "new",
         "open",
@@ -407,9 +446,9 @@
         "closed"
       ]
     },
-    "public.ticket_type_ecommerce_enum": {
+    "ticketing_prod.ticket_type_ecommerce_enum": {
       "name": "ticket_type_ecommerce_enum",
-      "schema": "public",
+      "schema": "ticketing_prod",
       "values": [
         "Return",
         "Shipping Issue",
@@ -420,12 +459,13 @@
         "COC Request",
         "SDS Request",
         "Quote Request",
-        "General Inquiry"
+        "General Inquiry",
+        "Test Entry"
       ]
     },
-    "public.ticketing_role_enum": {
+    "ticketing_prod.ticketing_role_enum": {
       "name": "ticketing_role_enum",
-      "schema": "public",
+      "schema": "ticketing_prod",
       "values": [
         "Admin",
         "Project Manager",
@@ -435,9 +475,9 @@
         "Other"
       ]
     },
-    "public.user_role": {
+    "ticketing_prod.user_role": {
       "name": "user_role",
-      "schema": "public",
+      "schema": "ticketing_prod",
       "values": [
         "admin",
         "manager",
@@ -445,7 +485,9 @@
       ]
     }
   },
-  "schemas": {},
+  "schemas": {
+    "ticketing_prod": "ticketing_prod"
+  },
   "sequences": {},
   "roles": {},
   "policies": {},

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import axios, { AxiosError } from 'axios';
-import { statusEnum } from '@/db/schema'; // Import enum
+import { ticketStatusEnum } from '@/db/schema'; // Import enum
 
 interface MarkButtonProps {
   initialStatus: string; // The status when the component mounts
@@ -26,10 +26,10 @@ const MarkButtonClient: React.FC<MarkButtonProps> = ({ initialStatus, ticketId, 
     setError(null);
 
     // Determine the next status based on the *current* state
-    const isResolved = currentStatus === statusEnum.enumValues[2]; // Assuming 'resolved' is at index 2
+    const isResolved = currentStatus === ticketStatusEnum.enumValues[2]; // Assuming 'resolved' is at index 2
     const nextStatus = isResolved
-      ? statusEnum.enumValues[0] // Mark as 'open' (index 0)
-      : statusEnum.enumValues[2]; // Mark as 'resolved'
+      ? ticketStatusEnum.enumValues[0] // Mark as 'open' (index 0)
+      : ticketStatusEnum.enumValues[2]; // Mark as 'resolved'
 
     try {
       // Send ONLY the status update via PUT
@@ -58,7 +58,7 @@ const MarkButtonClient: React.FC<MarkButtonProps> = ({ initialStatus, ticketId, 
     }
   };
 
-  const isCurrentlyResolved = currentStatus === statusEnum.enumValues[2]; // Use current local state
+  const isCurrentlyResolved = currentStatus === ticketStatusEnum.enumValues[2]; // Use current local state
   const buttonText = isCurrentlyResolved ? 'Mark as Open' : 'Mark as Resolved';
   const buttonClass = isCurrentlyResolved
     ? 'btn btn-outline-secondary btn-sm w-100 text-start' // Use outline buttons for consistency

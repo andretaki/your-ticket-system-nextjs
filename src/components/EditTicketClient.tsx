@@ -1,14 +1,15 @@
+// src/components/EditTicketClient.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
 import axios, { AxiosError } from 'axios';
 import { useRouter } from 'next/navigation';
-import { priorityEnum, statusEnum } from '@/db/schema';
+import { ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
 
-interface Project {
-  id: number;
-  name: string;
-}
+// interface Project { // REMOVED
+//   id: number;
+//   name: string;
+// }
 
 interface User {
   id: number;
@@ -18,7 +19,7 @@ interface User {
 
 interface Comment {
   id: number;
-  content: string;
+  commentText: string; // Changed from content to match schema
   createdAt: string;
   commenter: {
     id: number;
@@ -33,7 +34,7 @@ interface Ticket {
   description: string;
   status: string;
   priority: string;
-  project: Project;
+  // project: Project; // REMOVED
   assignee: User | null;
   reporter: User;
   createdAt: string;
@@ -48,53 +49,45 @@ interface EditTicketClientProps {
 const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
   const router = useRouter();
   
-  // Ticket form state
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [projectName, setProjectName] = useState('');
+  // const [projectName, setProjectName] = useState(''); // REMOVED
   const [assigneeEmail, setAssigneeEmail] = useState<string | null>(null);
-  const [priority, setPriority] = useState<string>(priorityEnum.enumValues[1]);
-  const [status, setStatus] = useState<string>(statusEnum.enumValues[0]);
+  const [priority, setPriority] = useState<string>(ticketPriorityEnum.enumValues[1]);
+  const [status, setStatus] = useState<string>(ticketStatusEnum.enumValues[0]);
   
-  // Comment form state
   const [newComment, setNewComment] = useState('');
   const [comments, setComments] = useState<Comment[]>([]);
   const [isAddingComment, setIsAddingComment] = useState(false);
   
-  // UI state
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   
-  // Data for dropdowns
-  const [projects, setProjects] = useState<Project[]>([]);
+  // const [projects, setProjects] = useState<Project[]>([]); // REMOVED
   const [users, setUsers] = useState<User[]>([]);
   
-  // Load ticket data and form options
   useEffect(() => {
     const loadData = async () => {
       try {
-        // Load ticket, projects, and users in parallel
-        const [ticketRes, projectsRes, usersRes] = await Promise.all([
+        const [ticketRes, usersRes] = await Promise.all([ // Removed projectsRes
           axios.get<Ticket>(`/api/tickets/${ticketId}`),
-          axios.get<Project[]>('/api/projects'),
+          // axios.get<Project[]>('/api/projects'), // REMOVED
           axios.get<User[]>('/api/users')
         ]);
         
         const ticket = ticketRes.data;
         
-        // Set form values from ticket
         setTitle(ticket.title);
         setDescription(ticket.description);
-        setProjectName(ticket.project.name);
+        // setProjectName(ticket.project.name); // REMOVED
         setAssigneeEmail(ticket.assignee?.email || null);
         setPriority(ticket.priority);
         setStatus(ticket.status);
-        setComments(ticket.comments);
+        setComments(ticket.comments.map(c => ({...c, content: c.commentText}))); // Ensure comment content is mapped if names differ
         
-        // Set dropdown options
-        setProjects(projectsRes.data);
+        // setProjects(projectsRes.data); // REMOVED
         setUsers(usersRes.data);
       } catch (err) {
         console.error('Error loading ticket:', err);
@@ -107,7 +100,6 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
     loadData();
   }, [ticketId]);
   
-  // Handle ticket update
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -121,32 +113,24 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
         assigneeEmail,
         priority,
         status
+        // No project data to send
       });
       
       console.log('Ticket updated:', response.data);
-      
-      // Navigate back to ticket list or stay on the same page
-      router.push('/tickets');
-      router.refresh(); // Refresh the page cache in Next.js
+      router.push(`/tickets/${ticketId}`); // Navigate to view page after edit
+      router.refresh();
     } catch (err: unknown) {
       console.error('Error updating ticket:', err);
-      
       if (axios.isAxiosError(err)) {
         const axiosError = err as AxiosError<{ error?: string, details?: Record<string, string[]> }>;
-        
         if (axiosError.response?.data?.details) {
-          // Handle validation errors for specific fields
           const details = axiosError.response.data.details;
           const newFieldErrors: Record<string, string> = {};
-          
-          // Convert array of errors per field to single string for UI
           Object.entries(details).forEach(([field, messages]) => {
             newFieldErrors[field] = Array.isArray(messages) ? messages[0] : String(messages);
           });
-          
           setFieldErrors(newFieldErrors);
         } else {
-          // Generic error message
           setError(axiosError.response?.data?.error || 'Failed to update ticket. Please try again.');
         }
       } else {
@@ -157,25 +141,22 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
     }
   };
   
-  // Handle adding a comment
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!newComment.trim()) {
-      return; // Don't submit empty comments
-    }
-    
+    if (!newComment.trim()) return;
     setIsAddingComment(true);
     
     try {
       const response = await axios.post(`/api/tickets/${ticketId}/comments`, {
-        content: newComment.trim()
+        content: newComment.trim() // 'content' is expected by the API
       });
       
-      // Add the new comment to the list
-      setComments(prevComments => [...prevComments, response.data.comment]);
-      
-      // Clear the comment input
+      // The API now returns the comment with commenter details, so use that
+      const addedComment = response.data.comment; 
+      setComments(prevComments => [...prevComments, {
+        ...addedComment,
+        content: addedComment.commentText // Map to local state if needed
+      }]);
       setNewComment('');
     } catch (err) {
       console.error('Error adding comment:', err);
@@ -194,7 +175,7 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
       <div className="col-md-8">
         <div className="card shadow-sm mb-4">
           <div className="card-header bg-light">
-            <h3 className="mb-0 h5">Edit Ticket</h3>
+            <h3 className="mb-0 h5">Edit Ticket #{ticketId}</h3> {/* Added Ticket ID */}
           </div>
           <div className="card-body">
             {error && (
@@ -231,6 +212,8 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
                 {fieldErrors.description && <div className="invalid-feedback">{fieldErrors.description}</div>}
               </div>
               
+              {/* Project Name field REMOVED */}
+
               <div className="row">
                 <div className="col-md-6 mb-3">
                   <label htmlFor="assignee" className="form-label">Assignee</label>
@@ -258,7 +241,7 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
                         value={priority}
                         onChange={(e) => setPriority(e.target.value)}
                       >
-                        {priorityEnum.enumValues.map((p) => (
+                        {ticketPriorityEnum.enumValues.map((p: string) => (
                           <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
                         ))}
                       </select>
@@ -272,7 +255,7 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
                         value={status}
                         onChange={(e) => setStatus(e.target.value)}
                       >
-                        {statusEnum.enumValues.map((s) => (
+                        {ticketStatusEnum.enumValues.map((s: string) => (
                           <option key={s} value={s}>
                             {s.replace('_', ' ').charAt(0).toUpperCase() + s.replace('_', ' ').slice(1)}
                           </option>
@@ -299,7 +282,7 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
                 <button
                   type="button"
                   className="btn btn-outline-secondary"
-                  onClick={() => router.push('/tickets')}
+                  onClick={() => router.push(`/tickets/${ticketId}`)}
                   disabled={isSubmitting}
                 >
                   Cancel
@@ -311,12 +294,32 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
       </div>
       
       <div className="col-md-4">
-        <div className="card shadow-sm mb-4">
+        <div className="card shadow-sm">
           <div className="card-header bg-light">
             <h3 className="mb-0 h5">Comments</h3>
           </div>
           <div className="card-body">
-            <form onSubmit={handleAddComment} className="mb-4">
+            <div className="comments-list mb-4">
+              {comments.length === 0 ? (
+                <p className="text-muted">No comments yet.</p>
+              ) : (
+                <ul className="list-group list-group-flush">
+                  {comments.map(comment => (
+                    <li key={comment.id} className="list-group-item px-0">
+                      <div className="d-flex justify-content-between mb-1">
+                        <h6 className="mb-0 fw-bold">{comment.commenter?.name || 'User'}</h6>
+                        <small className="text-muted">
+                          {new Date(comment.createdAt).toLocaleString()}
+                        </small>
+                      </div>
+                      <p className="mb-0">{comment.commentText}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            
+            <form onSubmit={handleAddComment}>
               <div className="mb-3">
                 <label htmlFor="newComment" className="form-label">Add a Comment</label>
                 <textarea
@@ -325,13 +328,11 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
                   rows={3}
                   value={newComment}
                   onChange={(e) => setNewComment(e.target.value)}
-                  placeholder="Type your comment here..."
-                  required
                 ></textarea>
               </div>
               <button 
                 type="submit" 
-                className="btn btn-primary" 
+                className="btn btn-primary w-100" 
                 disabled={isAddingComment || !newComment.trim()}
               >
                 {isAddingComment ? (
@@ -342,26 +343,6 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
                 ) : 'Add Comment'}
               </button>
             </form>
-            
-            <hr />
-            
-            <div className="comment-list">
-              {comments.length > 0 ? (
-                comments.map((comment) => (
-                  <div key={comment.id} className="comment mb-3 pb-3 border-bottom">
-                    <div className="d-flex justify-content-between">
-                      <strong>{comment.commenter.name}</strong>
-                      <small className="text-muted">
-                        {new Date(comment.createdAt).toLocaleDateString()} {new Date(comment.createdAt).toLocaleTimeString()}
-                      </small>
-                    </div>
-                    <p className="mb-0 mt-2">{comment.content}</p>
-                  </div>
-                ))
-              ) : (
-                <p className="text-muted text-center fst-italic">No comments yet.</p>
-              )}
-            </div>
           </div>
         </div>
       </div>
@@ -369,4 +350,4 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
   );
 };
 
-export default EditTicketClient; 
+export default EditTicketClient;

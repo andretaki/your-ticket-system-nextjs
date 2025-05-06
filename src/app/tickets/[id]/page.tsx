@@ -1,17 +1,17 @@
+// src/app/tickets/[id]/page.tsx
 import { notFound } from 'next/navigation';
 import { db } from '@/db';
 import { tickets } from '@/db/schema';
 import { eq } from 'drizzle-orm';
-import TicketViewClient from '@/components/TicketViewClient'; // Import the client component
+import TicketViewClient from '@/components/TicketViewClient';
 import { Metadata } from 'next';
 
 interface TicketViewPageProps {
   params: {
-    id: string; // Route parameters are always strings
+    id: string;
   };
 }
 
-// Function to generate metadata dynamically
 export async function generateMetadata({ params }: TicketViewPageProps): Promise<Metadata> {
     const ticketId = parseInt(params.id, 10);
     if (isNaN(ticketId)) {
@@ -32,16 +32,14 @@ export async function generateMetadata({ params }: TicketViewPageProps): Promise
 export default async function TicketViewPage({ params }: TicketViewPageProps) {
   const ticketId = parseInt(params.id, 10);
 
-  // Validate ID
   if (isNaN(ticketId)) {
-    notFound(); // Use Next.js notFound for invalid ID format
+    notFound();
   }
 
-  // Fetch ticket data server-side
   const ticket = await db.query.tickets.findFirst({
     where: eq(tickets.id, ticketId),
     with: {
-      // project: true, // No longer exists
+      // project: true, // Ensure this is REMOVED or commented out
       assignee: { columns: { id: true, name: true, email: true } },
       reporter: { columns: { id: true, name: true, email: true } },
       comments: {
@@ -51,16 +49,12 @@ export default async function TicketViewPage({ params }: TicketViewPageProps) {
     }
   });
 
-  // Handle ticket not found
   if (!ticket) {
     notFound();
   }
 
-  // Convert dates to string for serialization before passing to client component
-  // (Alternatively, pass Date objects and handle formatting entirely client-side)
   const serializedTicket = {
     ...ticket,
-    // No project data to serialize
     createdAt: ticket.createdAt.toISOString(),
     updatedAt: ticket.updatedAt.toISOString(),
     comments: ticket.comments.map(comment => ({
@@ -69,12 +63,9 @@ export default async function TicketViewPage({ params }: TicketViewPageProps) {
     })),
   };
 
-  // Pass the fetched data to the client component
-  // Note: You'll need to adjust the type definition in TicketViewClient accordingly
   return (
       <div className="container-fluid py-4">
-          {/* Cast to 'any' temporarily if type issues arise during prop passing, then fix types */}
           <TicketViewClient initialTicket={serializedTicket as any} />
       </div>
   );
-} 
+}

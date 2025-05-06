@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
-import { priorityEnum } from '@/db/schema';
+import { ticketPriorityEnum } from '@/db/schema';
 
 // Register necessary Chart.js components
 ChartJS.register(
@@ -23,7 +23,7 @@ interface TicketSummary {
 }
 
 // Get priority values from our enum
-const priorityValues = priorityEnum.enumValues;
+const priorityValues = ticketPriorityEnum.enumValues;
 
 // Define the standard priority order we want to display
 const standardPriorities = ['low', 'medium', 'high'] as const;

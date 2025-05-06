@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
-import { tickets, users, projects, priorityEnum, statusEnum } from '@/db/schema';
+import { tickets, users, ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 
@@ -8,8 +8,8 @@ import { z } from 'zod';
 const updateTicketSchema = z.object({
   title: z.string().min(1, { message: "Title is required" }).max(255).optional(),
   description: z.string().min(1, { message: "Description is required" }).optional(),
-  status: z.enum(statusEnum.enumValues).optional(),
-  priority: z.enum(priorityEnum.enumValues).optional(),
+  status: z.enum(ticketStatusEnum.enumValues).optional(),
+  priority: z.enum(ticketPriorityEnum.enumValues).optional(),
   assigneeEmail: z.string().email().nullable().optional(), // Optional assignee
 });
 
@@ -35,7 +35,6 @@ export async function GET(
     const ticket = await db.query.tickets.findFirst({
       where: eq(tickets.id, ticketId),
       with: {
-        project: true,
         assignee: {
           columns: {
             id: true,

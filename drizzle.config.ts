@@ -8,6 +8,7 @@ export default defineConfig({
   schema: './src/db/schema.ts',
   out: './src/db/migrations',
   dialect: 'postgresql',
+  schemaFilter: ['ticketing_prod'],
   introspect: {
     casing: 'camel',
   },

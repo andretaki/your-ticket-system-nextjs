@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import { Doughnut } from 'react-chartjs-2';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
-import { statusEnum } from '@/db/schema';
+import { ticketStatusEnum } from '@/db/schema';
 
 // Register necessary Chart.js components
 ChartJS.register(ArcElement, Tooltip, Legend);
@@ -16,7 +16,7 @@ interface TicketSummary {
 }
 
 // Get status labels from our enum and capitalize them for display
-const statusValues = statusEnum.enumValues;
+const statusValues = ticketStatusEnum.enumValues;
 const labels = statusValues.map(status => 
   status.replace('_', ' ').split(' ').map(word => 
     word.charAt(0).toUpperCase() + word.slice(1)

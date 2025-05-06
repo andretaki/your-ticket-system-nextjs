@@ -31,12 +31,6 @@ export default function Sidebar() {
                     </Link>
                 </li>
                 <li>
-                    <Link href="/manage-projects" className="nav-link"> {/* Use href */}
-                        <i className="fas fa-folder"></i>
-                        Manage Projects
-                    </Link>
-                </li>
-                <li>
                     <Link href="/admin/email-processing" className="nav-link"> {/* Use href */}
                         <i className="fas fa-envelope"></i>
                         Email Processing

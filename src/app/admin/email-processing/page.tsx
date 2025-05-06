@@ -1,3 +1,4 @@
+// src/app/admin/email-processing/page.tsx
 import { Metadata } from 'next';
 import EmailProcessingButton from '@/components/EmailProcessingButton';
 
@@ -36,7 +37,7 @@ export default function EmailProcessingPage() {
                         <li>The email subject as the ticket title</li>
                         <li>The email body as the ticket description</li>
                         <li>The sender is registered as a user in the system</li>
-                        <li>New tickets are assigned to the "Inbox Triage" project</li>
+                        {/* Removed line about project assignment */}
                       </ul>
                     </li>
                     <li>Processed emails are marked as read and moved to a "Processed" folder</li>
@@ -91,4 +92,4 @@ export default function EmailProcessingPage() {
       </div>
     </div>
   );
-} 
+}

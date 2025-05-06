@@ -1,14 +1,15 @@
+// src/components/CreateTicketClient.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
 import axios, { AxiosError } from 'axios';
 import { useRouter } from 'next/navigation';
-import { priorityEnum, statusEnum } from '@/db/schema';
+import { ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
 
-interface Project {
-  id: number;
-  name: string;
-}
+// interface Project { // REMOVED
+//   id: number;
+//   name: string;
+// }
 
 interface User {
   id: number;
@@ -19,44 +20,32 @@ interface User {
 const CreateTicketClient: React.FC = () => {
   const router = useRouter();
   
-  // Form state
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [projectName, setProjectName] = useState('');
+  // const [projectName, setProjectName] = useState(''); // REMOVED
   const [assigneeEmail, setAssigneeEmail] = useState<string | null>(null);
-  const [priority, setPriority] = useState<string>(priorityEnum.enumValues[1]); // Default 'medium'
-  const [status, setStatus] = useState<string>(statusEnum.enumValues[0]); // Default 'open'
+  const [priority, setPriority] = useState<string>(ticketPriorityEnum.enumValues[1]);
+  const [status, setStatus] = useState<string>(ticketStatusEnum.enumValues[0]);
   
-  // UI state
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true); // Keep for users fetch
   
-  // Data for dropdowns
-  const [projects, setProjects] = useState<Project[]>([]);
+  // const [projects, setProjects] = useState<Project[]>([]); // REMOVED
   const [users, setUsers] = useState<User[]>([]);
   
-  // Fetch data for dropdowns
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // For a real app, consider using React Query or SWR for data fetching
-        const [projectsRes, usersRes] = await Promise.all([
-          axios.get<Project[]>('/api/projects'),
-          axios.get<User[]>('/api/users')
-        ]);
-        
-        setProjects(projectsRes.data);
+        // Fetch only users now
+        const usersRes = await axios.get<User[]>('/api/users');
         setUsers(usersRes.data);
         
-        // Set default project if available
-        if (projectsRes.data.length > 0) {
-          setProjectName(projectsRes.data[0].name);
-        }
+        // Removed project fetching and default setting
       } catch (err) {
-        console.error('Error loading form data:', err);
-        setError('Failed to load projects or users. Please refresh the page.');
+        console.error('Error loading form data (users):', err);
+        setError('Failed to load users. Please refresh the page.');
       } finally {
         setIsLoading(false);
       }
@@ -75,36 +64,27 @@ const CreateTicketClient: React.FC = () => {
       const response = await axios.post('/api/tickets', {
         title,
         description,
-        projectName,
+        // projectName, // REMOVED
         assigneeEmail,
         priority,
         status
       });
       
       console.log('Ticket created:', response.data);
-      
-      // Navigate to the ticket list or the new ticket
       router.push('/tickets');
-      router.refresh(); // Refresh the page cache in Next.js
+      router.refresh();
     } catch (err: unknown) {
       console.error('Error creating ticket:', err);
-      
       if (axios.isAxiosError(err)) {
         const axiosError = err as AxiosError<{ error?: string, details?: Record<string, string[]> }>;
-        
         if (axiosError.response?.data?.details) {
-          // Handle validation errors for specific fields
           const details = axiosError.response.data.details;
           const newFieldErrors: Record<string, string> = {};
-          
-          // Convert array of errors per field to single string for UI
           Object.entries(details).forEach(([field, messages]) => {
             newFieldErrors[field] = Array.isArray(messages) ? messages[0] : String(messages);
           });
-          
           setFieldErrors(newFieldErrors);
         } else {
-          // Generic error message
           setError(axiosError.response?.data?.error || 'Failed to create ticket. Please try again.');
         }
       } else {
@@ -159,7 +139,8 @@ const CreateTicketClient: React.FC = () => {
             {fieldErrors.description && <div className="invalid-feedback">{fieldErrors.description}</div>}
           </div>
           
-          <div className="row">
+          {/* Project Name field REMOVED */}
+          {/* <div className="row">
             <div className="col-md-6 mb-3">
               <label htmlFor="project" className="form-label">Project <span className="text-danger">*</span></label>
               <select
@@ -176,8 +157,9 @@ const CreateTicketClient: React.FC = () => {
               </select>
               {fieldErrors.projectName && <div className="invalid-feedback">{fieldErrors.projectName}</div>}
             </div>
-            
-            <div className="col-md-6 mb-3">
+          </div> */}
+        
+          <div className="mb-3"> {/* Assignee field can now take full width or be adjusted */}
               <label htmlFor="assignee" className="form-label">Assignee</label>
               <select
                 className={`form-select ${fieldErrors.assigneeEmail ? 'is-invalid' : ''}`}
@@ -191,7 +173,6 @@ const CreateTicketClient: React.FC = () => {
                 ))}
               </select>
               {fieldErrors.assigneeEmail && <div className="invalid-feedback">{fieldErrors.assigneeEmail}</div>}
-            </div>
           </div>
           
           <div className="row">
@@ -203,7 +184,7 @@ const CreateTicketClient: React.FC = () => {
                 value={priority}
                 onChange={(e) => setPriority(e.target.value)}
               >
-                {priorityEnum.enumValues.map((p) => (
+                {ticketPriorityEnum.enumValues.map((p: string) => (
                   <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
                 ))}
               </select>
@@ -217,7 +198,7 @@ const CreateTicketClient: React.FC = () => {
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
               >
-                {statusEnum.enumValues.map((s) => (
+                {ticketStatusEnum.enumValues.map((s: string) => (
                   <option key={s} value={s}>
                     {s.replace('_', ' ').charAt(0).toUpperCase() + s.replace('_', ' ').slice(1)}
                   </option>
@@ -254,4 +235,4 @@ const CreateTicketClient: React.FC = () => {
   );
 };
 
-export default CreateTicketClient; 
+export default CreateTicketClient;

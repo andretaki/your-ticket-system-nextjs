@@ -1,19 +1,19 @@
+// src/components/TicketDisplay.tsx
 'use client';
 
 import React from 'react';
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
 import MarkButtonClient from './MarkButtonClient';
-import { priorityEnum } from '@/db/schema';
+import { ticketPriorityEnum } from '@/db/schema';
 
-// Type definition for a ticket with Date objects
 export interface DisplayTicket {
   id: number;
   title: string;
   status: string;
   priority: string;
   type?: string | null;
-  projectName: string;
+  // projectName: string; // REMOVED
   assigneeName: string | null;
   reporterName: string | null;
   createdAt: Date;
@@ -28,35 +28,14 @@ interface TicketDisplayProps {
   refreshTickets: () => void;
 }
 
-// Helper function for priority styling
-const PriorityCell: React.FC<{ priority: string }> = ({ priority }) => {
-  let className = '';
-  
-  switch (priority) {
-    case priorityEnum.enumValues[0]: // 'low'
-      className = 'low-priority text-success fw-bold'; // Use Bootstrap classes
-      break;
-    case priorityEnum.enumValues[1]: // 'medium'
-      className = 'med-priority text-warning fw-bold';
-      break;
-    case priorityEnum.enumValues[2]: // 'high'
-      className = 'high-priority text-danger fw-bold';
-      break;
-    default:
-      className = 'text-secondary fw-bold';
-  }
-  
-  return <td className={className}>{priority}</td>;
-};
-
 const TicketDisplay: React.FC<TicketDisplayProps> = ({ ticket, deleteTicket, refreshTickets }) => {
-  // Get status and priority classes
   const getStatusClass = (status: string) => {
     switch (status.toLowerCase()) {
+      case 'new': return 'badge bg-info text-dark';
       case 'open': return 'badge bg-secondary';
       case 'in_progress': return 'badge bg-primary';
-      case 'resolved': return 'badge bg-success';
-      case 'closed': return 'badge bg-dark';
+      case 'pending_customer': return 'badge bg-warning text-dark';
+      case 'closed': return 'badge bg-success';
       default: return 'badge bg-secondary';
     }
   };
@@ -65,34 +44,33 @@ const TicketDisplay: React.FC<TicketDisplayProps> = ({ ticket, deleteTicket, ref
     switch (priority.toLowerCase()) {
       case 'high': return 'badge bg-danger';
       case 'medium': return 'badge bg-warning text-dark';
-      case 'low': return 'badge bg-info text-dark';
+      case 'low': return 'badge bg-success'; // Changed from info to success for better distinction
+      case 'urgent': return 'badge bg-danger fw-bold'; // Make urgent stand out
       default: return 'badge bg-secondary';
     }
   };
 
   const getTypeClass = (type?: string | null) => {
-    if (!type) return 'badge bg-secondary';
+    if (!type) return 'badge bg-light text-dark border'; // More neutral for N/A
+    // Add specific styling for your e-commerce types if desired
     switch (type.toLowerCase()) {
-      case 'bug': return 'badge bg-danger';
-      case 'feature': return 'badge bg-primary';
-      case 'task': return 'badge bg-info text-dark';
+      case 'return': return 'badge bg-warning text-dark';
+      case 'shipping issue': return 'badge bg-danger';
+      case 'order issue': return 'badge bg-orange'; // Custom or Bootstrap extended
+      // ... other types
       default: return 'badge bg-secondary';
     }
   };
 
   const displayType = ticket.type || 'N/A';
-
-  // Format dates
   const formattedCreatedAt = formatDistanceToNow(ticket.createdAt, { addSuffix: true });
   const formattedUpdatedAt = formatDistanceToNow(ticket.updatedAt, { addSuffix: true });
   
-  // Truncate description for table display
   const truncateDescription = (desc?: string | null) => {
     if (!desc) return 'No description';
     return desc.length > 100 ? `${desc.substring(0, 100)}...` : desc;
   };
   
-  // Handle delete with confirmation
   const handleDelete = async () => {
     if (window.confirm('Are you sure you want to delete this ticket?')) {
       await deleteTicket(ticket.id);
@@ -111,7 +89,7 @@ const TicketDisplay: React.FC<TicketDisplayProps> = ({ ticket, deleteTicket, ref
         </small>
       </td>
       <td>{truncateDescription(ticket.description)}</td>
-      <td>{ticket.projectName}</td>
+      {/* <td>{ticket.projectName}</td> */} {/* REMOVED Project Column */}
       <td>{ticket.assigneeName || 'Unassigned'}</td>
       <td>
         <span className={getPriorityClass(ticket.priority)}>
@@ -147,4 +125,4 @@ const TicketDisplay: React.FC<TicketDisplayProps> = ({ ticket, deleteTicket, ref
   );
 };
 
-export default TicketDisplay; 
+export default TicketDisplay;
