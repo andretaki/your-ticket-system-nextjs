@@ -25,7 +25,11 @@ const EmailProcessingButton: React.FC = () => {
       setResult(response.data);
     } catch (err: any) {
       console.error('Failed to process emails:', err);
-      setError(err.response?.data?.error || 'An unexpected error occurred while processing emails.');
+      if (err.response?.status === 401) {
+        setError('Unauthorized. Please ensure you are logged in. Automated processing should use the X-API-Key header.');
+      } else {
+        setError(err.response?.data?.error || 'An unexpected error occurred while processing emails.');
+      }
     } finally {
       setIsProcessing(false);
     }

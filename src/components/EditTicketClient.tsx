@@ -19,7 +19,7 @@ interface User {
 
 interface Comment {
   id: number;
-  commentText: string; // Changed from content to match schema
+  commentText: string;
   createdAt: string;
   commenter: {
     id: number;
@@ -85,7 +85,7 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
         setAssigneeEmail(ticket.assignee?.email || null);
         setPriority(ticket.priority);
         setStatus(ticket.status);
-        setComments(ticket.comments.map(c => ({...c, content: c.commentText}))); // Ensure comment content is mapped if names differ
+        setComments(ticket.comments);
         
         // setProjects(projectsRes.data); // REMOVED
         setUsers(usersRes.data);
@@ -148,15 +148,12 @@ const EditTicketClient: React.FC<EditTicketClientProps> = ({ ticketId }) => {
     
     try {
       const response = await axios.post(`/api/tickets/${ticketId}/comments`, {
-        content: newComment.trim() // 'content' is expected by the API
+        commentText: newComment.trim()
       });
       
       // The API now returns the comment with commenter details, so use that
       const addedComment = response.data.comment; 
-      setComments(prevComments => [...prevComments, {
-        ...addedComment,
-        content: addedComment.commentText // Map to local state if needed
-      }]);
+      setComments(prevComments => [...prevComments, addedComment]);
       setNewComment('');
     } catch (err) {
       console.error('Error adding comment:', err);

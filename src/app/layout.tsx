@@ -5,6 +5,7 @@ import "./globals.css";
 import Script from 'next/script';
 import Navbar from '@/components/Navbar';
 import Sidebar from '@/components/Sidebar';
+import AuthSessionProvider from '@/components/AuthSessionProvider';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,13 +38,15 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <Navbar />
-        <div className="wrapper">
-          <Sidebar />
-          <div id="content">
-            {children}
+        <AuthSessionProvider>
+          <Navbar />
+          <div className="wrapper">
+            <Sidebar />
+            <div id="content">
+              {children}
+            </div>
           </div>
-        </div>
+        </AuthSessionProvider>
       </body>
     </html>
   );

@@ -3,8 +3,8 @@ import { db } from '@/db';
 import { ticketComments, tickets, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-// You might need authentication logic here to get the current user
-// import { getCurrentUser } from '@/lib/auth'; // Placeholder for your auth logic
+import { getServerSession } from "next-auth/next"; // Import getServerSession
+import { authOptions } from '@/lib/authOptions';   // Import your authOptions
 
 // --- Zod Schema for Validation ---
 const createCommentSchema = z.object({
@@ -27,6 +27,13 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    // --- Authentication Check ---
+    const session = await getServerSession(authOptions);
+    if (!session || !session.user || !session.user.id) {
+      return NextResponse.json({ error: 'Unauthorized. Please sign in to comment.' }, { status: 401 });
+    }
+    // --- End Authentication Check ---
+
     // Parse and validate ID
     const ticketId = getTicketId(params);
     
@@ -40,12 +47,6 @@ export async function POST(
       return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });
     }
 
-    // TODO: Add Authentication check here - ensure user is logged in
-    // const currentUser = await getCurrentUser();
-    // if (!currentUser) {
-    //   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    // }
-
     // Get request body
     const body = await request.json();
 
@@ -58,8 +59,8 @@ export async function POST(
 
     const { content } = validationResult.data;
 
-    // TODO: Authentication - Replace with actual user ID from session
-    const commenterId = 1; // Placeholder - Should come from auth context
+    // User ID from authentication - already string type which matches schema
+    const commenterId = session.user.id;
     
     // Get commenter details for convenience
     const commenter = await db.query.users.findFirst({

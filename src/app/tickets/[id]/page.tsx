@@ -13,7 +13,8 @@ interface TicketViewPageProps {
 }
 
 export async function generateMetadata({ params }: TicketViewPageProps): Promise<Metadata> {
-    const ticketId = parseInt(params.id, 10);
+    const resolvedParams = await params;
+    const ticketId = parseInt(resolvedParams.id, 10);
     if (isNaN(ticketId)) {
         return { title: 'Invalid Ticket - Issue Tracker' };
     }
@@ -30,7 +31,8 @@ export async function generateMetadata({ params }: TicketViewPageProps): Promise
 }
 
 export default async function TicketViewPage({ params }: TicketViewPageProps) {
-  const ticketId = parseInt(params.id, 10);
+  const resolvedParams = await params;
+  const ticketId = parseInt(resolvedParams.id, 10);
 
   if (isNaN(ticketId)) {
     notFound();

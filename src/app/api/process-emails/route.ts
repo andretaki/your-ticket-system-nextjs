@@ -1,10 +1,12 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, NextRequest } from 'next/server';
 import * as graphService from '@/lib/graphService';
 import { db } from '@/db';
 import { users, tickets, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { Message } from '@microsoft/microsoft-graph-types';
 import { analyzeEmailContent } from '@/lib/aiService'; // Import the AI service
+import { getServerSession } from "next-auth/next"; // Add this
+import { authOptions } from '@/lib/authOptions';   // Add this
 
 // Configuration (Consider moving to a config file or ENV vars)
 const PROCESSED_FOLDER_NAME = process.env.PROCESSED_FOLDER_NAME || "Processed";
@@ -12,6 +14,7 @@ const ERROR_FOLDER_NAME = process.env.ERROR_FOLDER_NAME || "Error";
 const DEFAULT_PRIORITY = ticketPriorityEnum.enumValues[1]; // 'medium'
 const DEFAULT_STATUS = ticketStatusEnum.enumValues[0]; // 'new'
 const DEFAULT_TYPE = 'General Inquiry' as typeof ticketTypeEcommerceEnum.enumValues[number];
+const INTERNAL_DOMAIN = "alliancechemical.com"; // Define your internal domain
 
 // Helper to find or create a user based on email
 async function findOrCreateUser(senderEmail: string, senderName?: string | null): Promise<number | null> {
@@ -30,14 +33,13 @@ async function findOrCreateUser(senderEmail: string, senderName?: string | null)
             return user.id;
         } else {
             // User doesn't exist, create a basic user record
-            console.log(`Email processing: Creating new user for ${senderEmail}`);
-            // Use a secure default password or a flag indicating external creation
-            const placeholderPassword = "password_placeholder_" + Date.now(); // NOT FOR PRODUCTION LOGIN
+            console.log(`Email processing: Creating new external user for ${senderEmail}`);
             const [newUser] = await db.insert(users).values({
                 email: senderEmail,
                 name: senderName || senderEmail.split('@')[0], // Use name part of email if no name provided
-                password: placeholderPassword, // Needs hashing in a real app
+                password: null, // Password is now nullable for external users
                 role: 'user', // Or a specific role for email reporters
+                isExternal: true, // Mark as an externally created user
             }).returning({ id: users.id });
             return newUser.id;
         }
@@ -48,8 +50,30 @@ async function findOrCreateUser(senderEmail: string, senderName?: string | null)
 }
 
 // --- POST Endpoint to Trigger Processing ---
-// NOTE: In production, this should ideally be a secure endpoint or a scheduled task, not a public POST.
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+    // --- Security Check ---
+    let authorized = false;
+    const apiKey = request.headers.get('x-api-key');
+    const expectedKey = process.env.EMAIL_PROCESSING_SECRET_KEY;
+
+    if (expectedKey && apiKey === expectedKey) {
+        authorized = true;
+        console.log("API: Authorized via X-API-Key header.");
+    } else {
+        // If secret is not provided or incorrect, check for authenticated session
+        const session = await getServerSession(authOptions);
+        if (session?.user?.id) { // Check if any authenticated user session exists
+            authorized = true;
+            console.log(`API: Authorized via authenticated user session: ${session.user.email}`);
+        }
+    }
+
+    if (!authorized) {
+        console.warn("API: Unauthorized email processing attempt");
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    // --- End Security Check ---
+
     console.log("API: Starting email processing...");
     let processedCount = 0;
     let errorCount = 0;
@@ -101,6 +125,19 @@ export async function POST(request: Request) {
             const senderEmail = email.sender.emailAddress.address;
             const senderName = email.sender.emailAddress.name;
             const subject = email.subject;
+            
+            // --- Domain Check: Skip internal emails ---
+            if (senderEmail.endsWith(`@${INTERNAL_DOMAIN}`)) {
+                console.log(`Email processing: Skipping email from internal domain ${INTERNAL_DOMAIN}: ${senderEmail} (Message ID: ${messageId})`);
+                // Optionally, still mark as read and move to a different folder if needed, or just ignore.
+                // For now, let's just mark as read and move to "Processed" to clear it from unread.
+                await graphService.markEmailAsRead(messageId);
+                if (processedFolderId) await graphService.moveEmail(messageId, processedFolderId);
+                // Do not count as an error, it's an intentional skip.
+                continue; // Skip to the next email
+            }
+            // --- End Domain Check ---
+            
             // Prefer plain text body if available, otherwise use HTML body (strip tags if possible later) or preview
             const emailBody = email.body?.contentType === 'text'
                 ? email.body.content ?? email.bodyPreview ?? ''

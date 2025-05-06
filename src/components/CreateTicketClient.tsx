@@ -120,7 +120,7 @@ const CreateTicketClient: React.FC = () => {
               className={`form-control ${fieldErrors.title ? 'is-invalid' : ''}`}
               id="title"
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTitle(e.target.value)}
               required
             />
             {fieldErrors.title && <div className="invalid-feedback">{fieldErrors.title}</div>}
@@ -133,7 +133,7 @@ const CreateTicketClient: React.FC = () => {
               id="description"
               rows={5}
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDescription(e.target.value)}
               required
             ></textarea>
             {fieldErrors.description && <div className="invalid-feedback">{fieldErrors.description}</div>}
@@ -165,7 +165,7 @@ const CreateTicketClient: React.FC = () => {
                 className={`form-select ${fieldErrors.assigneeEmail ? 'is-invalid' : ''}`}
                 id="assignee"
                 value={assigneeEmail || ''}
-                onChange={(e) => setAssigneeEmail(e.target.value || null)}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setAssigneeEmail(e.target.value || null)}
               >
                 <option value="">Unassigned</option>
                 {users.map((user) => (
@@ -182,7 +182,7 @@ const CreateTicketClient: React.FC = () => {
                 className="form-select"
                 id="priority"
                 value={priority}
-                onChange={(e) => setPriority(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setPriority(e.target.value)}
               >
                 {ticketPriorityEnum.enumValues.map((p: string) => (
                   <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
@@ -196,7 +196,7 @@ const CreateTicketClient: React.FC = () => {
                 className="form-select"
                 id="status"
                 value={status}
-                onChange={(e) => setStatus(e.target.value)}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setStatus(e.target.value)}
               >
                 {ticketStatusEnum.enumValues.map((s: string) => (
                   <option key={s} value={s}>

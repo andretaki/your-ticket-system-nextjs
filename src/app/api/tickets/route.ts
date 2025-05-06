@@ -3,6 +3,8 @@ import { db } from '@/db';
 import { tickets, users, ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
 import { eq, desc, asc, and, or, ilike, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { getServerSession } from "next-auth/next";
+import { authOptions } from '@/lib/authOptions';
 
 // --- Zod Schema for Validation ---
 const createTicketSchema = z.object({
@@ -146,6 +148,13 @@ export async function GET(request: NextRequest) {
 // --- POST: Create a new ticket ---
 export async function POST(request: Request) {
   try {
+    // --- Authentication Check ---
+    const session = await getServerSession(authOptions);
+    if (!session || !session.user || !session.user.id) {
+      return NextResponse.json({ error: 'Unauthorized. Please sign in to create a ticket.' }, { status: 401 });
+    }
+    // --- End Authentication Check ---
+
     const body = await request.json();
 
     // --- Input Validation ---
@@ -168,7 +177,8 @@ export async function POST(request: Request) {
       externalMessageId 
     } = validationResult.data;
 
-    let assigneeId: number | null = null;
+    // Initialize assigneeId as null (text type in schema)
+    let assigneeId: string | null = null;
     if (assigneeEmail) {
       const assignee = await db.query.users.findFirst({
         where: eq(users.email, assigneeEmail),
@@ -181,8 +191,8 @@ export async function POST(request: Request) {
       assigneeId = assignee.id;
     }
 
-    // TODO: Auth - Replace placeholder with actual logged-in user ID
-    const reporterId = 1; // Placeholder - Should come from session/token
+    // User ID from session is already string which matches schema
+    const reporterId = session.user.id; 
 
     // --- Create Ticket ---
     const [newTicket] = await db.insert(tickets).values({

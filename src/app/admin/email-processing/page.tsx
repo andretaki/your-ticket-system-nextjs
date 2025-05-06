@@ -72,7 +72,9 @@ export default function EmailProcessingPage() {
                   <h6>Option 1: Scheduled API Calls</h6>
                   <p>
                     Set up a service like Azure Functions, AWS Lambda, or GitHub Actions to call
-                    the <code>/api/process-emails</code> endpoint at regular intervals.
+                    the <code>/api/process-emails</code> endpoint (as a POST request) at regular intervals.
+                    You <strong>must</strong> include the <code>X-API-Key</code> header with the value set in your
+                    <code>EMAIL_PROCESSING_SECRET_KEY</code> environment variable.
                   </p>
                   
                   <h6>Option 2: Power Automate</h6>
@@ -81,8 +83,8 @@ export default function EmailProcessingPage() {
                   </p>
                   
                   <div className="alert alert-warning">
-                    <strong>Note:</strong> For security, the email processing endpoint should be
-                    protected with proper authentication in a production environment.
+                    <strong>Security Note:</strong> The email processing endpoint is protected by a secret key.
+                    Ensure the <code>X-API-Key</code> header is sent with the correct value for automated calls.
                   </div>
                 </div>
               </div>
