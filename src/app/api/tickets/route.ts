@@ -12,8 +12,11 @@ const createTicketSchema = z.object({
   assigneeEmail: z.string().email().nullable().optional(), // Optional assignee
   priority: z.enum(ticketPriorityEnum.enumValues).optional().default(ticketPriorityEnum.enumValues[1]), // Default medium
   status: z.enum(ticketStatusEnum.enumValues).optional().default(ticketStatusEnum.enumValues[0]), // Default open
-  // Email-related fields for tickets created from emails
+  // Customer information fields
   senderEmail: z.string().email().optional(),
+  senderPhone: z.string().optional(),
+  orderNumber: z.string().optional(),
+  // Email-related fields for tickets created from emails
   senderName: z.string().optional(),
   externalMessageId: z.string().optional(),
 });

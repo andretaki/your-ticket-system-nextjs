@@ -28,9 +28,13 @@ interface EmailAnalysisResult {
     ticketType: typeof validTicketTypes[number] | 'Other'; // Allow 'Other' as fallback
     orderNumber: string | null;
     trackingNumber: string | null;
+    lotNumber: string | null; // NEW: Added lot number field
     summary: string; // For ticket title
     prioritySuggestion: typeof validPriorities[number]; // AI suggests priority
     sentiment: 'positive' | 'neutral' | 'negative' | null; // Optional sentiment
+    likelyCustomerRequest: boolean; // NEW: AI's assessment
+    classificationReason?: string; // NEW: Brief reason for classification
+    intent: 'order_status_inquiry' | 'tracking_request' | 'return_request' | 'order_issue' | 'documentation_request' | 'quote_request' | 'purchase_order_submission' | 'general_inquiry' | 'other' | null;
 }
 
 // --- Configure Generation Settings ---
@@ -65,6 +69,7 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
 
         **Valid Ticket Types:** ${validTicketTypes.join(', ')}, Other
         **Valid Priorities:** ${validPriorities.join(', ')}
+        **Valid Intents:** order_status_inquiry, tracking_request, return_request, order_issue, documentation_request, quote_request, purchase_order_submission, general_inquiry, other
 
         **Email Subject:**
         ${subject}
@@ -73,22 +78,30 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
         ${body}
 
         **Instructions:**
-        1.  Determine the most appropriate **ticketType** from the valid list. If none fit well, use "Other".
-        2.  Extract the customer's **orderNumber**. It might look like #12345, ORD-67890, SO-555 etc. If none is found, return null.
-        3.  Extract any **trackingNumber**. Common formats include long numbers (FedEx, UPS), or combinations like 1Z... (UPS). If none is found, return null.
-        4.  Generate a concise **summary** (max 60 characters) suitable for a ticket title, capturing the main point of the email.
-        5.  Suggest a **prioritySuggestion** based on the content. Look for words like "urgent", "important", "issue", "problem", or negative sentiment. Default to "medium" if unsure.
-        6.  Analyze the overall customer **sentiment** ('positive', 'neutral', 'negative'). Return null if unclear.
+        1.  Determine the primary **intent** from the valid list. If the user asks for tracking OR general status/delivery, use 'order_status_inquiry'. Use 'tracking_request' only if they ONLY ask for tracking.
+        2.  Determine the most appropriate **ticketType** from the valid list. If none fit well, use "Other".
+        3.  Extract the customer's **orderNumber**. It might look like #12345, ORD-67890, PO 12345, 3693, etc. Be flexible. If none is found, return null.
+        4.  Extract any **trackingNumber**. If none is found, return null.
+        5.  Extract any **lotNumber**. Look for patterns like LOT12345, Lot: ABCDE, L/N: ..., Lot Number: ..., etc. If none is found, return null.
+        6.  Generate a concise **summary** (max 60 characters) suitable for a ticket title.
+        7.  Suggest a **prioritySuggestion**. Default to "medium" if unsure. "high" for issues, "urgent" if explicitly stated.
+        8.  Analyze the overall customer **sentiment** ('positive', 'neutral', 'negative'). Return null if unclear.
+        9.  Classify if this email is likely a legitimate customer request requiring action (**likelyCustomerRequest**: true) or not (false).
+        10. Provide a brief **classificationReason**.
 
         **Output Format:**
         Return **ONLY** a valid JSON object matching this structure:
         {
+          "intent": "...",
           "ticketType": "...",
           "orderNumber": "..." | null,
           "trackingNumber": "..." | null,
+          "lotNumber": "..." | null,
           "summary": "...",
           "prioritySuggestion": "...",
-          "sentiment": "..." | null
+          "sentiment": "..." | null,
+          "likelyCustomerRequest": true | false,
+          "classificationReason": "..."
         }
     `;
 
@@ -124,18 +137,31 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
         if (
             !parsedResult ||
             typeof parsedResult.summary !== 'string' ||
-            !validTicketTypes.includes(parsedResult.ticketType as any) && parsedResult.ticketType !== 'Other' ||
-            !validPriorities.includes(parsedResult.prioritySuggestion as any)
+            (!validTicketTypes.includes(parsedResult.ticketType as any) && parsedResult.ticketType !== 'Other') ||
+            !validPriorities.includes(parsedResult.prioritySuggestion as any) ||
+            typeof parsedResult.likelyCustomerRequest !== 'boolean' ||
+            !['order_status_inquiry', 'tracking_request', 'return_request', 'order_issue', 'documentation_request', 'quote_request', 'purchase_order_submission', 'general_inquiry', 'other', null].includes(parsedResult.intent)
         ) {
-            console.error("AI Service Error: Parsed JSON does not match expected structure or has invalid enum values.", parsedResult);
-            return null; // Indicate failure due to structure mismatch
+            console.error("AI Service Error: Parsed JSON has invalid structure or enum values.", parsedResult);
+            // Try to fix common issues before failing
+            if (parsedResult && !validTicketTypes.includes(parsedResult.ticketType as any)) {
+                parsedResult.ticketType = 'General Inquiry'; // Default if AI hallucinates type
+            }
+            if (parsedResult && !validPriorities.includes(parsedResult.prioritySuggestion as any)) {
+                parsedResult.prioritySuggestion = 'medium'; // Default priority
+            }
+            // If still invalid after fixing, return null
+            if (!parsedResult || !['order_status_inquiry', 'tracking_request', 'return_request', 'order_issue', 'documentation_request', 'quote_request', 'purchase_order_submission', 'general_inquiry', 'other', null].includes(parsedResult.intent)) {
+                console.error("AI Service Error: Could not recover - Invalid intent or other core fields missing.");
+                return null;
+            }
+            console.warn("AI Service Warning: Recovered from minor validation issue in AI response.");
         }
 
-         // Ensure 'Other' is handled if the AI didn't pick a specific type
+        // Ensure 'Other'/'General Inquiry' is handled
         if (!validTicketTypes.includes(parsedResult.ticketType as any)) {
-            parsedResult.ticketType = 'Other';
+            parsedResult.ticketType = 'General Inquiry'; // Or 'Other'
         }
-
 
         console.log("AI Service: Successfully parsed analysis:", parsedResult);
         return parsedResult;

@@ -6,6 +6,8 @@ import { db } from '@/db';
 import { tickets, users, ticketComments, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum } from '@/db/schema'; // Added ticketComments
 import { eq, or, inArray, sql } from 'drizzle-orm'; // Added or, inArray, sql
 import { analyzeEmailContent } from '@/lib/aiService';
+import { getOrderTrackingInfo, OrderTrackingInfo } from '@/lib/shipstationService'; // Import the new service
+import { ticketEventEmitter } from '@/lib/eventEmitter'; // Import event emitter
 
 // --- Constants ---
 const INTERNAL_DOMAIN = process.env.INTERNAL_EMAIL_DOMAIN || "alliancechemical.com";
@@ -72,16 +74,22 @@ function parseMessageIdHeader(headerValue: string | null | undefined): string[] 
 // --- Result Interface ---
 interface ProcessEmailResult {
     success: boolean;
-    ticketId?: number; // ID of the created/updated ticket
-    commentId?: number; // ID of the created comment if it was a reply
+    ticketId?: number;
+    commentId?: number;
     message: string;
-    skipped?: boolean; // Was the email intentionally skipped (internal, duplicate)?
+    skipped?: boolean;
+    automation_attempted?: boolean;
+    automation_info?: OrderTrackingInfo | null;
 }
 
 // --- Core Processing Function for a Single Email ---
 export async function processSingleEmail(emailMessage: Message): Promise<ProcessEmailResult> {
     const messageId = emailMessage.id;
     console.log(`EmailProcessor: Starting processing for Message ID: ${messageId}`);
+    let automationAttempted = false;
+    let automationInfo: OrderTrackingInfo | null = null;
+    let draftReplyContent: string | null = null;
+    let ticketStatus: typeof ticketStatusEnum.enumValues[number] = DEFAULT_STATUS;
 
     try {
         // --- Basic Validation ---
@@ -274,85 +282,185 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
                     { subject, bodyPreview: body.substring(0, 200), error: aiError }
                 );
             }
-        } else {
-            console.warn(`EmailProcessor: Skipping AI analysis for email ${messageId} due to missing subject or body.`);
         }
 
-        // Prepare Ticket Data
+        // --- Check for CoA Request Missing Lot Number ---
+        if (aiAnalysis?.likelyCustomerRequest &&
+            (aiAnalysis.intent === 'documentation_request' || aiAnalysis.ticketType === 'COA Request') &&
+            !aiAnalysis.lotNumber) {
+            console.log(`EmailProcessor: COA request detected for email ${messageId} but missing Lot Number. Preparing info request.`);
+            automationAttempted = true;
+
+            // Prepare the draft reply
+            const customerName = senderName || senderEmail.split('@')[0];
+            const productName = aiAnalysis.summary.includes('for') 
+                ? aiAnalysis.summary.split('for')[1].trim() 
+                : "the product mentioned";
+
+            draftReplyContent = `
+Hi ${customerName},
+
+Thank you for reaching out regarding the Certificate of Analysis (CoA).
+
+To ensure we provide the correct document, could you please reply to this email with the Lot Number for ${productName}?
+
+If you also have the original Order Number, that would be helpful as well.
+
+Once we have the Lot Number, we'll process your CoA request promptly.
+
+Best regards,
+Alliance Chemical Support
+`.trim();
+        }
+
+        // --- ShipStation Automation Step ---
+        // Check if AI suggests it AND an order number exists
+        if (aiAnalysis?.likelyCustomerRequest &&
+            (aiAnalysis.intent === 'order_status_inquiry' || aiAnalysis.intent === 'tracking_request') &&
+            aiAnalysis.orderNumber)
+        {
+            console.log(`EmailProcessor: AI identified intent '${aiAnalysis.intent}' for order ${aiAnalysis.orderNumber}. Checking ShipStation...`);
+            automationAttempted = true;
+            // getOrderTrackingInfo returns OrderTrackingInfo | null
+            automationInfo = await getOrderTrackingInfo(aiAnalysis.orderNumber);
+
+            if (automationInfo) { // Check if the lookup itself didn't critically fail (return null)
+                console.log(`EmailProcessor: ShipStation lookup result for ${aiAnalysis.orderNumber}: Found=${automationInfo.found}, Status=${automationInfo.orderStatus}`);
+            } else {
+                console.error(`EmailProcessor: ShipStation lookup returned null for order ${aiAnalysis.orderNumber}.`);
+                // Alert already handled within shipstationService
+            }
+        }
+
+        // --- Prepare Ticket Data and Internal Note ---
+        let internalNoteContent = '';
+
+        // Add explicit check for automationInfo before accessing its properties
+        if (automationAttempted && automationInfo) {
+            if (automationInfo.found) { // Now TS knows automationInfo is not null here
+                internalNoteContent += `**ShipStation Info for Order ${aiAnalysis?.orderNumber}:**\n`;
+                internalNoteContent += `Status: ${automationInfo.orderStatus}\n`;
+                if (automationInfo.shipments && automationInfo.shipments.length > 0) {
+                    internalNoteContent += `Shipments:\n`;
+                    // Add type annotation for 'ship' parameter
+                    automationInfo.shipments.forEach((ship: { carrier: string; trackingNumber: string; shipDate: string }) => {
+                        internalNoteContent += `- Carrier: ${ship.carrier}, Tracking: ${ship.trackingNumber}, Shipped: ${new Date(ship.shipDate).toLocaleDateString()}\n`;
+                    });
+                } else {
+                    internalNoteContent += `Shipments: None found.\n`;
+                }
+            } else {
+                // Access errorMessage only if found is false
+                internalNoteContent += `**ShipStation Lookup:** Order ${aiAnalysis?.orderNumber} lookup attempted. ${automationInfo.errorMessage || 'Order not found.'}\n`;
+            }
+        // Handle case where automation was attempted but lookup failed critically (automationInfo is null)
+        } else if (automationAttempted && !automationInfo) {
+            internalNoteContent += `**ShipStation Lookup:** Order ${aiAnalysis?.orderNumber} lookup failed critically. Check service logs.\n`;
+        }
+
+        // Add draft reply to internal note if available
+        if (draftReplyContent) {
+            if (internalNoteContent) {
+                internalNoteContent += '\n\n---\n\n';
+            }
+            internalNoteContent += `**Suggested Reply (Request for Lot #):**\n${draftReplyContent}`;
+            // Set status only if drafting reply for missing info
+            ticketStatus = 'pending_customer' as typeof ticketStatusEnum.enumValues[number];
+        }
+
         const ticketData = {
             title: aiAnalysis?.summary?.substring(0, 255) || subject.substring(0, 255),
             description: body,
-            reporterId: reporterId, // TEXT ID
+            reporterId: reporterId,
             priority: aiAnalysis?.prioritySuggestion || DEFAULT_PRIORITY,
-            status: DEFAULT_STATUS,
+            status: ticketStatus,
             type: (aiAnalysis?.ticketType && ticketTypeEcommerceEnum.enumValues.includes(aiAnalysis.ticketType as any))
                   ? aiAnalysis.ticketType as typeof ticketTypeEcommerceEnum.enumValues[number]
                   : DEFAULT_TYPE,
             orderNumber: aiAnalysis?.orderNumber || null,
-            trackingNumber: aiAnalysis?.trackingNumber || null,
+            // Check automationInfo before accessing shipments
+            trackingNumber: aiAnalysis?.trackingNumber || automationInfo?.shipments?.[0]?.trackingNumber || null,
             senderEmail: senderEmail,
             senderName: senderName,
-            externalMessageId: emailMessage.internetMessageId || null, // Store for future reply matching
-            conversationId: conversationThreadId || null // Store conversation ID
+            externalMessageId: emailMessage.internetMessageId || null,
+            conversationId: conversationThreadId || null
         };
 
-        // Create Ticket in DB
+        // --- Create Ticket and Internal Note ---
         try {
             const [newTicket] = await db.insert(tickets).values(ticketData).returning({ id: tickets.id });
-            console.log(`EmailProcessor: Created ticket ${newTicket.id} for email ${messageId}. AI Used: ${!!aiAnalysis}. ConversationId: ${conversationThreadId}`);
+            const newTicketId = newTicket.id;
+            console.log(`EmailProcessor: Created ticket ${newTicketId} for email ${messageId}. AI Used: ${!!aiAnalysis}. ConvID: ${conversationThreadId}`);
+
+            // Add the internal note if we have content
+            if (internalNoteContent.trim()) {
+                // Update the draft reply with the actual ticket ID if it exists
+                const noteContent = draftReplyContent 
+                    ? internalNoteContent.replace('(Ticket ID will be generated shortly)', `(Ref: Ticket #${newTicketId})`)
+                    : internalNoteContent;
+
+                await db.insert(ticketComments).values({
+                    ticketId: newTicketId,
+                    commentText: noteContent,
+                    commenterId: null, // Indicate system generated
+                    isInternalNote: true,
+                    isFromCustomer: false,
+                });
+                console.log(`EmailProcessor: Added internal note with automation info to ticket ${newTicketId}`);
+            }
 
             // Mark Email as Read
             await graphService.markEmailAsRead(messageId);
             console.log(`EmailProcessor: New email ${messageId} marked as read.`);
 
-            return { success: true, ticketId: newTicket.id, message: "Ticket created successfully" };
+            // Emit event for the new ticket
+            ticketEventEmitter.emit({
+                type: 'ticket_created',
+                ticketId: newTicketId
+            });
+
+            return {
+                success: true,
+                ticketId: newTicketId,
+                message: draftReplyContent 
+                    ? "Ticket created. Reply asking for Lot # drafted as internal note."
+                    : "Ticket created successfully" + (automationAttempted ? " with automation info." : "."),
+                automation_attempted: automationAttempted,
+                automation_info: automationInfo || undefined
+            };
         } catch (dbError: any) {
-            console.error(`EmailProcessor: Database error creating ticket for email ${messageId}:`, dbError);
-             // Attempt mark read even on DB error
-             try { await graphService.markEmailAsRead(messageId); } catch(e){}
-            await alertService.trackErrorAndAlert(
-                'EmailProcessor-DB',
-                `Failed to create ticket in database for email ${messageId}`,
-                { subject, senderEmail, error: dbError }
-            );
-            throw dbError; // Propagate error
+            console.error(`EmailProcessor: Database error creating ticket/note for email ${messageId}:`, dbError);
+            try { await graphService.markEmailAsRead(messageId); } catch(e){}
+            await alertService.trackErrorAndAlert('EmailProcessor-DB', `DB error for email ${messageId}`, dbError);
+            throw dbError;
         }
 
     } catch (error: any) {
-        // --- General Error Handling for the entire function ---
         console.error(`EmailProcessor: CRITICAL Error processing email ${messageId || 'unknown'}:`, error);
-        // Ensure the email is marked as read if possible, even after an error
-        if (messageId) {
-            try {
-                await graphService.markEmailAsRead(messageId);
-                console.log(`EmailProcessor: Errored email ${messageId} marked as read.`);
-            } catch (readError: any) {
-                console.error(`EmailProcessor: FAILED to mark errored email ${messageId} as read after critical error:`, readError);
-                // This is a critical failure
-                await alertService.trackErrorAndAlert(
-                    'EmailProcessor-CriticalReadFail',
-                    `FAILED to mark errored email ${messageId} as read after processing error`,
-                    { initialError: error.message, readError: readError.message }
-                );
-            }
-        }
-        // Send a general alert for uncaught processing errors
-        await alertService.trackErrorAndAlert(
-            'EmailProcessor-Critical',
-            `Unhandled error processing email ${messageId || 'unknown'}`,
-            error
-        );
-        return { success: false, message: error.message || 'Unknown critical processing error' };
+        if (messageId) { try { await graphService.markEmailAsRead(messageId); } catch (readError: any) { /* ... */ } }
+        await alertService.trackErrorAndAlert('EmailProcessor-Critical', `Unhandled error processing email ${messageId || 'unknown'}`, error);
+        return { success: false, message: error.message || 'Unknown critical processing error', automation_attempted: automationAttempted };
     }
 }
 
-// --- Function to Process a Batch of Unread Emails (for polling/cron) ---
-// (No changes needed in this function, it just calls processSingleEmail)
-export async function processUnreadEmails(limit = 50) {
+// --- Batch Processing Function (processUnreadEmails) ---
+export async function processUnreadEmails(limit = 50): Promise<{
+    success: boolean;
+    message: string;
+    processed: number;
+    commentAdded: number;
+    errors: number;
+    skipped: number;
+    automationAttempts: number;
+    automationSuccess: number;
+    results: ProcessEmailResult[];
+}> {
     let processedCount = 0;
     let commentAddedCount = 0;
     let errorCount = 0;
     let skippedCount = 0;
+    let automationAttempts = 0;
+    let automationSuccess = 0;
     const results: ProcessEmailResult[] = [];
     const criticalErrors: any[] = [];
 
@@ -360,21 +468,35 @@ export async function processUnreadEmails(limit = 50) {
 
     let unreadEmails: Message[];
     try {
-        // Fetch emails including headers needed for threading
         unreadEmails = await graphService.getUnreadEmails(limit);
     } catch (fetchError: any) {
         console.error("EmailProcessor: Failed to fetch unread emails:", fetchError);
-        await alertService.trackErrorAndAlert(
-            'EmailProcessor-FetchFailed',
-            `Failed to fetch unread emails from Microsoft Graph`,
-            fetchError
-        );
-        return { success: false, message: `Failed to fetch emails: ${fetchError.message}`, processed: 0, commentAdded: 0, errors: 1, skipped: 0, results: [] };
+        await alertService.trackErrorAndAlert('EmailProcessor-Fetch', 'Failed to fetch unread emails', fetchError);
+        return {
+            success: false,
+            message: `Failed to fetch emails: ${fetchError.message}`,
+            processed: 0,
+            commentAdded: 0,
+            errors: 1,
+            skipped: 0,
+            automationAttempts: 0,
+            automationSuccess: 0,
+            results: []
+        };
     }
 
     if (unreadEmails.length === 0) {
-        console.log("EmailProcessor: No unread emails found in this batch.");
-        return { success: true, message: "No unread emails found.", processed: 0, commentAdded: 0, errors: 0, skipped: 0, results: [] };
+        return {
+            success: true,
+            message: "No unread emails found.",
+            processed: 0,
+            commentAdded: 0,
+            errors: 0,
+            skipped: 0,
+            automationAttempts: 0,
+            automationSuccess: 0,
+            results: []
+        };
     }
 
     console.log(`EmailProcessor: Found ${unreadEmails.length} unread email(s). Processing...`);
@@ -382,39 +504,35 @@ export async function processUnreadEmails(limit = 50) {
     for (const email of unreadEmails) {
         const result = await processSingleEmail(email);
         results.push(result);
-        if (result.success) {
-            if (result.skipped) {
-                skippedCount++;
-            } else if (result.commentId) { // Check if it was processed as a comment
-                commentAddedCount++;
-            } else {
-                processedCount++; // It was processed as a new ticket
+
+        if (result.automation_attempted) {
+            automationAttempts++;
+            if (result.automation_info?.found) {
+                automationSuccess++;
             }
+        }
+
+        if (result.success) {
+            if (result.skipped) skippedCount++;
+            else if (result.commentId) commentAddedCount++;
+            else processedCount++;
         } else {
             errorCount++;
-            if (!result.skipped) {
-                criticalErrors.push({
-                    messageId: email.id,
-                    subject: email.subject,
-                    sender: email.sender?.emailAddress?.address,
-                    error: result.message
-                });
-            }
+            if (!result.skipped) criticalErrors.push({
+                messageId: email.id,
+                error: result.message
+            });
         }
     }
 
-    const summary = `Batch processing complete. New Tickets: ${processedCount}, Comments Added: ${commentAddedCount}, Skipped: ${skippedCount}, Errors: ${errorCount}.`;
+    const summary = `Batch processing complete. New Tickets: ${processedCount}, Comments Added: ${commentAddedCount}, Skipped: ${skippedCount}, Errors: ${errorCount}. Automation: ${automationSuccess}/${automationAttempts} successful lookups.`;
     console.log(`EmailProcessor: ${summary}`);
 
     if (criticalErrors.length > 0) {
         await alertService.trackErrorAndAlert(
-            'EmailProcessor-BatchErrors',
-            `Encountered ${criticalErrors.length} critical errors in email batch processing`,
-            {
-                batchSize: unreadEmails.length,
-                summary: summary,
-                errors: criticalErrors
-            }
+            'EmailProcessor-Batch',
+            `Critical errors during batch processing`,
+            { errors: criticalErrors }
         );
     }
 
@@ -425,6 +543,8 @@ export async function processUnreadEmails(limit = 50) {
         commentAdded: commentAddedCount,
         errors: errorCount,
         skipped: skippedCount,
-        results: results,
+        automationAttempts,
+        automationSuccess,
+        results
     };
 }

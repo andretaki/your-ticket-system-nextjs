@@ -14,12 +14,13 @@ const updateTicketSchema = z.object({
 });
 
 // Helper to parse and validate ticket ID
-const getTicketId = (params: { id: string }) => {
-  const id = parseInt(params.id);
-  if (isNaN(id)) {
+const getTicketId = async (params: { id: string }) => {
+  const { id } = await params;
+  const ticketId = parseInt(id);
+  if (isNaN(ticketId)) {
     throw new Error('Invalid ticket ID');
   }
-  return id;
+  return ticketId;
 };
 
 // --- GET: Fetch a single ticket with detailed information ---
@@ -29,7 +30,7 @@ export async function GET(
 ) {
   try {
     // Parse and validate ID
-    const ticketId = getTicketId(params);
+    const ticketId = await getTicketId(params);
 
     // Fetch the ticket with relations
     const ticket = await db.query.tickets.findFirst({
@@ -91,7 +92,7 @@ export async function PUT(
 ) {
   try {
     // Parse and validate ID
-    const ticketId = getTicketId(params);
+    const ticketId = await getTicketId(params);
     
     // Get request body
     const body = await request.json();
@@ -184,7 +185,7 @@ export async function DELETE(
 ) {
   try {
     // Parse and validate ID
-    const ticketId = getTicketId(params);
+    const ticketId = await getTicketId(params);
     
     // Check if ticket exists
     const existingTicket = await db.query.tickets.findFirst({

@@ -5,6 +5,7 @@ import { tickets, users, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommer
 import { eq } from 'drizzle-orm';
 import { analyzeEmailContent } from '@/lib/aiService';
 import { processSingleEmail } from '@/lib/emailProcessor';
+import { ticketEventEmitter } from '@/lib/eventEmitter';
 
 // Constants from your process-emails route (or a shared config)
 const PROCESSED_FOLDER_NAME = process.env.PROCESSED_FOLDER_NAME || "Processed";
@@ -76,6 +77,13 @@ async function createTicketFromEmail(email: any, reporterId: string) {
 
         const [newTicket] = await db.insert(tickets).values(ticketData).returning({ id: tickets.id });
         console.log(`Webhook: Created ticket ${newTicket.id} for email ${email.id}. AI Used: ${!!aiAnalysis}`);
+        
+        // Emit event for the new ticket
+        ticketEventEmitter.emit({
+            type: 'ticket_created',
+            ticketId: newTicket.id
+        });
+        
         return newTicket;
     } catch (error) {
         console.error(`Webhook: Error creating ticket for email ${email.id}:`, error);

@@ -91,6 +91,7 @@ export const tickets = ticketingProdSchema.table('tickets', {
   trackingNumber: varchar('tracking_number', { length: 255 }),
   senderEmail: varchar('sender_email', { length: 255 }),
   senderName: varchar('sender_name', { length: 255 }),
+  senderPhone: varchar('sender_phone', { length: 20 }), // Added phone field
   externalMessageId: varchar('external_message_id', { length: 255 }).unique(),
   conversationId: text('conversation_id'), // <-- Added conversationId column (nullable)
 }, (table) => {
@@ -162,6 +163,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   uploadedAttachments: many(ticketAttachments, { relationName: 'AttachmentUploader' }), // Added for attachments
   accounts: many(accounts),
   sessions: many(sessions),
+  reviewedQuarantinedEmails: many(quarantinedEmails),
 }));
 
 export const ticketsRelations = relations(tickets, ({ one, many }) => ({
@@ -196,16 +198,53 @@ export const ticketAttachmentsRelations = relations(ticketAttachments, ({ one })
   ticket: one(tickets, {
     fields: [ticketAttachments.ticketId],
     references: [tickets.id],
-    relationName: 'AttachmentTicket', // Relation name optional but good practice
+    relationName: 'AttachmentTicket',
   }),
   comment: one(ticketComments, {
     fields: [ticketAttachments.commentId],
     references: [ticketComments.id],
-    relationName: 'AttachmentComment', // Relation name optional
+    relationName: 'AttachmentComment',
   }),
   uploader: one(users, {
     fields: [ticketAttachments.uploaderId],
     references: [users.id],
-    relationName: 'AttachmentUploader', // Use relation name defined in usersRelations
+    relationName: 'AttachmentUploader',
+  }),
+}));
+
+// --- Quarantine Table ---
+export const quarantineStatusEnum = ticketingProdSchema.enum('quarantine_status_enum', [
+  'pending_review',
+  'approved_ticket',
+  'approved_comment',
+  'rejected_spam',
+  'rejected_vendor',
+  'deleted'
+]);
+
+export const quarantinedEmails = ticketingProdSchema.table('quarantined_emails', {
+  id: serial('id').primaryKey(),
+  originalGraphMessageId: text('original_graph_message_id').notNull().unique(),
+  internetMessageId: text('internet_message_id').notNull().unique(),
+  senderEmail: varchar('sender_email', { length: 255 }).notNull(),
+  senderName: varchar('sender_name', { length: 255 }),
+  subject: varchar('subject', { length: 500 }).notNull(),
+  bodyPreview: text('body_preview').notNull(),
+  receivedAt: timestamp('received_at', { withTimezone: true }).notNull(),
+  aiClassification: boolean('ai_classification').notNull(),
+  aiReason: text('ai_reason'),
+  status: quarantineStatusEnum('status').default('pending_review').notNull(),
+  reviewerId: text('reviewer_id').references(() => users.id, { onDelete: 'set null' }),
+  reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
+  reviewNotes: text('review_notes'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// Add relations for quarantinedEmails
+export const quarantinedEmailsRelations = relations(quarantinedEmails, ({ one }) => ({
+  reviewer: one(users, {
+    fields: [quarantinedEmails.reviewerId],
+    references: [users.id],
   }),
 }));

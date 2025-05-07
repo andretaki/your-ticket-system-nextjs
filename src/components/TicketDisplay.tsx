@@ -51,13 +51,21 @@ const TicketDisplay: React.FC<TicketDisplayProps> = ({ ticket, deleteTicket, ref
   };
 
   const getTypeClass = (type?: string | null) => {
-    if (!type) return 'badge bg-light text-dark border'; // More neutral for N/A
-    // Add specific styling for your e-commerce types if desired
+    if (!type) return 'badge bg-light text-dark border';
+    
     switch (type.toLowerCase()) {
       case 'return': return 'badge bg-warning text-dark';
       case 'shipping issue': return 'badge bg-danger';
-      case 'order issue': return 'badge bg-orange'; // Custom or Bootstrap extended
-      // ... other types
+      case 'order issue': return 'badge bg-danger fw-bold';
+      case 'new order': return 'badge bg-success';
+      case 'credit request': return 'badge bg-info text-dark';
+      case 'coa request': return 'badge bg-primary';
+      case 'coc request': return 'badge bg-primary';
+      case 'sds request': return 'badge bg-primary';
+      case 'quote request': return 'badge bg-info';
+      case 'purchase order': return 'badge bg-success';
+      case 'general inquiry': return 'badge bg-secondary';
+      case 'test entry': return 'badge bg-light text-dark';
       default: return 'badge bg-secondary';
     }
   };

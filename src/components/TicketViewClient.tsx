@@ -5,23 +5,15 @@ import axios, { AxiosError } from 'axios';
 import { format, formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
 import { ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum } from '@/db/schema';
+// Import the new component and its types
+import CommunicationItem from './CommunicationItem';
+import { AttachmentData } from '@/types/attachment';
 
 // --- Types for Data Received from Server Component ---
 interface BaseUser {
-  id: number;
+  id: string; // Changed to string for UUID
   name: string | null; // Allow null name
   email: string;
-}
-
-interface AttachmentData {
-  id: number;
-  filename: string;
-  originalFilename: string;
-  fileSize: number;
-  mimeType: string;
-  uploadedAt: string;
-  uploaderId?: number;
-  uploader?: BaseUser;
 }
 
 interface CommentData {
@@ -33,6 +25,7 @@ interface CommentData {
   isFromCustomer: boolean;
   isOutgoingReply?: boolean; // Added - Mark if this comment was sent as email
   attachments?: AttachmentData[]; // Attachments for this comment
+  externalMessageId?: string | null; // Keep if needed elsewhere
 }
 
 interface TicketData {
@@ -52,6 +45,7 @@ interface TicketData {
   senderEmail: string | null; // Email of the original sender if ticket came from email
   senderName: string | null;
   externalMessageId: string | null; // Added for threading context
+  conversationId: string | null; // Added
   comments: CommentData[];
   attachments?: AttachmentData[]; // Attachments directly on the ticket
 }
@@ -60,25 +54,37 @@ interface TicketViewClientProps {
   initialTicket: TicketData;
 }
 
-// Helper to get badge classes
-const getStatusClass = (status: string) => {
+// Helper function to get status badge class
+const getStatusClass = (status: string): string => {
   switch (status) {
-    case 'new': return 'badge bg-info text-dark';
-    case 'open': return 'badge bg-secondary';
-    case 'in_progress': return 'badge bg-primary';
-    case 'pending_customer': return 'badge bg-warning text-dark';
-    case 'closed': return 'badge bg-success';
-    default: return 'badge bg-secondary';
+    case 'OPEN':
+      return 'badge bg-success';
+    case 'IN_PROGRESS':
+      return 'badge bg-primary';
+    case 'WAITING':
+      return 'badge bg-warning text-dark';
+    case 'RESOLVED':
+      return 'badge bg-info text-dark';
+    case 'CLOSED':
+      return 'badge bg-secondary';
+    default:
+      return 'badge bg-light text-dark';
   }
 };
 
-const getPriorityClass = (priority: string) => {
+// Helper function to get priority badge class
+const getPriorityClass = (priority: string): string => {
   switch (priority) {
-    case 'low': return 'badge bg-success';
-    case 'medium': return 'badge bg-info text-dark';
-    case 'high': return 'badge bg-warning text-dark';
-    case 'urgent': return 'badge bg-danger';
-    default: return 'badge bg-secondary';
+    case 'LOW':
+      return 'badge bg-success';
+    case 'MEDIUM':
+      return 'badge bg-warning text-dark';
+    case 'HIGH':
+      return 'badge bg-danger';
+    case 'URGENT':
+      return 'badge bg-danger text-white';
+    default:
+      return 'badge bg-light text-dark';
   }
 };
 
@@ -290,7 +296,7 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
     }
   };
 
-  // Helper function to determine file icon class based on MIME type
+  // Helper function to get file icon class based on MIME type
   const getFileIconClass = (mimeType?: string): string => {
     if (!mimeType) return 'fa-file';
     if (mimeType.startsWith('image/')) return 'fa-file-image';
@@ -301,6 +307,40 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
     if (mimeType.includes('zip') || mimeType.includes('archive')) return 'fa-file-archive';
     if (mimeType.startsWith('text/')) return 'fa-file-alt';
     return 'fa-file';
+  };
+
+  // Add this helper function inside the component
+  const isDraftReplyNote = (commentText: string): boolean => {
+    return commentText.includes('**Suggested Reply (Request for Lot #):**');
+  };
+
+  const extractDraftContent = (commentText: string): string => {
+    const marker = '**Suggested Reply (Request for Lot #):**\n';
+    const index = commentText.indexOf(marker);
+    return index !== -1 ? commentText.substring(index + marker.length) : '';
+  };
+
+  // Add this handler function inside the component
+  const handleApproveAndSendDraft = async (draftText: string) => {
+    if (!ticket.senderEmail) {
+      setError("Cannot send email: Original sender email not found for this ticket.");
+      return;
+    }
+    setSubmitDisabled(true);
+    setError(null);
+    try {
+      await axios.post(`/api/tickets/${ticket.id}/reply`, {
+        content: draftText,
+        isInternalNote: false,
+        sendAsEmail: true,
+      });
+      await refreshTicket();
+    } catch (err) {
+      console.error('Error sending draft reply:', err);
+      setError('Failed to send the email reply.');
+    } finally {
+      setSubmitDisabled(false);
+    }
   };
 
   return (
@@ -425,6 +465,9 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
                         icon = <i className="fas fa-user-edit me-2 text-secondary"></i>;
                     }
 
+                    const isDraft = isDraftReplyNote(comment.commentText || '');
+                    const draftContent = isDraft ? extractDraftContent(comment.commentText || '') : '';
+
                     return (
                         <div key={comment.id} className={itemClasses}>
                             <div className="d-flex justify-content-between align-items-center mb-2">
@@ -439,9 +482,37 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
                                     {format(new Date(comment.createdAt), 'PPp')} {/* Use PPp for Date and Time */}
                                 </small>
                             </div>
-                            <div className="comment-text pt-1" style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
-                                {comment.commentText}
-                            </div>
+                            {isDraft ? (
+                                <div className="draft-reply-section mt-2 p-3 border border-primary rounded bg-primary-subtle">
+                                    <h6 className="text-primary fw-bold">
+                                        <i className="fas fa-reply me-1"></i> Suggested Reply
+                                    </h6>
+                                    <div className="comment-text pt-1 mb-3" style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+                                        {draftContent}
+                                    </div>
+                                    <div className="d-flex gap-2">
+                                        <button
+                                            className="btn btn-sm btn-outline-primary"
+                                            onClick={() => navigator.clipboard.writeText(draftContent)}
+                                            title="Copy reply text"
+                                        >
+                                            <i className="fas fa-copy"></i> Copy
+                                        </button>
+                                        <button
+                                            className="btn btn-sm btn-primary"
+                                            onClick={() => handleApproveAndSendDraft(draftContent)}
+                                            disabled={submitDisabled}
+                                            title="Send this reply as an email to the customer"
+                                        >
+                                            <i className="fas fa-paper-plane"></i> Approve & Send Email
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="comment-text pt-1" style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+                                    {comment.commentText}
+                                </div>
+                            )}
                             
                             {/* Display attachments for this comment */}
                             {comment.attachments && comment.attachments.length > 0 && (

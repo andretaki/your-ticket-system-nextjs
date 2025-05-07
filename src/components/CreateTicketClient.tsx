@@ -21,6 +21,9 @@ const CreateTicketClient: React.FC = () => {
   const [assigneeEmail, setAssigneeEmail] = useState<string | null>(null);
   const [priority, setPriority] = useState<string>(ticketPriorityEnum.enumValues[1]); // Default 'medium'
   const [status, setStatus] = useState<string>(ticketStatusEnum.enumValues[0]); // Default 'new'
+  const [customerEmail, setCustomerEmail] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [orderNumber, setOrderNumber] = useState('');
 
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
@@ -62,7 +65,10 @@ const CreateTicketClient: React.FC = () => {
         description,
         assigneeEmail, // Send null if unassigned
         priority,
-        status
+        status,
+        senderEmail: customerEmail,
+        senderPhone: customerPhone,
+        orderNumber
       });
 
       console.log('Ticket created:', response.data);
@@ -133,6 +139,59 @@ const CreateTicketClient: React.FC = () => {
             />
             <label htmlFor="title">Title <span className="text-danger">*</span></label>
             {fieldErrors.title && <div className="invalid-feedback">{fieldErrors.title}</div>}
+          </div>
+
+          {/* Customer Information Section */}
+          <div className="card mb-4">
+            <div className="card-header bg-light">
+              <h4 className="mb-0 h6">Customer Information</h4>
+            </div>
+            <div className="card-body">
+              <div className="row g-3">
+                <div className="col-md-4">
+                  <div className="form-floating">
+                    <input
+                      type="email"
+                      className={`form-control ${fieldErrors.senderEmail ? 'is-invalid' : ''}`}
+                      id="customerEmail"
+                      placeholder="Customer Email"
+                      value={customerEmail}
+                      onChange={(e) => setCustomerEmail(e.target.value)}
+                    />
+                    <label htmlFor="customerEmail">Email</label>
+                    {fieldErrors.senderEmail && <div className="invalid-feedback">{fieldErrors.senderEmail}</div>}
+                  </div>
+                </div>
+                <div className="col-md-4">
+                  <div className="form-floating">
+                    <input
+                      type="tel"
+                      className={`form-control ${fieldErrors.senderPhone ? 'is-invalid' : ''}`}
+                      id="customerPhone"
+                      placeholder="Customer Phone"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                    />
+                    <label htmlFor="customerPhone">Phone</label>
+                    {fieldErrors.senderPhone && <div className="invalid-feedback">{fieldErrors.senderPhone}</div>}
+                  </div>
+                </div>
+                <div className="col-md-4">
+                  <div className="form-floating">
+                    <input
+                      type="text"
+                      className={`form-control ${fieldErrors.orderNumber ? 'is-invalid' : ''}`}
+                      id="orderNumber"
+                      placeholder="Order Number"
+                      value={orderNumber}
+                      onChange={(e) => setOrderNumber(e.target.value)}
+                    />
+                    <label htmlFor="orderNumber">Order #</label>
+                    {fieldErrors.orderNumber && <div className="invalid-feedback">{fieldErrors.orderNumber}</div>}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Description - Floating Label */}

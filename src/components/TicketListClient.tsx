@@ -41,9 +41,7 @@ interface TicketListClientProps {
 }
 
 // Custom type for our debounce timeout ref that includes the _searchTermPrevious property
-interface DebounceTimeoutRef extends NodeJS.Timeout {
-  _searchTermPrevious?: string;
-}
+interface DebounceTimeoutRef extends NodeJS.Timeout {}
 
 export default function TicketListClient({ limit, showSearch = true }: TicketListClientProps) {
   const [tickets, setTickets] = useState<TicketListEntry[]>([]);
@@ -60,9 +58,12 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
 
   // Sorting states
   const [sortBy, setSortBy] = useState('createdAt');
-  const [sortOrder, setSortOrder] = useState('desc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const debounceTimeoutRef = useRef<DebounceTimeoutRef | null>(null);
+  const previousSearchTermRef = useRef<string>('');
+  const isInitialMount = useRef(true);
+  const eventSourceRef = useRef<EventSource | null>(null);
 
   const fetchTickets = useCallback(async () => {
     if (!isApplyingFilters) setIsLoading(true); // Show full load spinner only if not already applying filters
@@ -96,6 +97,36 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     }
   }, [statusFilter, priorityFilter, assigneeFilter, searchTerm, sortBy, sortOrder, limit]);
 
+  // Set up real-time updates using Server-Sent Events
+  useEffect(() => {
+    // Only set up real-time updates if we're on the main tickets page (not limited view)
+    if (!limit) {
+      // Create EventSource connection
+      const eventSource = new EventSource('/api/tickets/events');
+      eventSourceRef.current = eventSource;
+
+      // Listen for ticket updates
+      eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'ticket_created' || data.type === 'ticket_updated' || data.type === 'ticket_deleted') {
+          fetchTickets();
+        }
+      };
+
+      // Handle connection errors
+      eventSource.onerror = (error) => {
+        console.error('EventSource failed:', error);
+        eventSource.close();
+      };
+
+      return () => {
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+        }
+      };
+    }
+  }, [fetchTickets, limit]);
+
   // Initial data load (tickets & users for filters if applicable)
   useEffect(() => {
     fetchTickets(); // Call fetchTickets directly
@@ -114,8 +145,6 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
   useEffect(() => {
     if (!showSearch || limit) return; // Only apply debounced search on the full ticket list page
     
-    // Add this flag to prevent firing on initial mount
-    const isInitialMount = useRef(true);
     if (isInitialMount.current) {
       isInitialMount.current = false;
       return;
@@ -127,13 +156,11 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     
     debounceTimeoutRef.current = setTimeout(() => {
       // Only fetch if search term has actually changed and is not just whitespace
-      if (searchTerm !== debounceTimeoutRef.current?._searchTermPrevious) {
-         fetchTickets();
+      if (searchTerm !== previousSearchTermRef.current) {
+        fetchTickets();
       }
-      if (debounceTimeoutRef.current) {
-        debounceTimeoutRef.current._searchTermPrevious = searchTerm;
-      }
-    }, 700) as unknown as DebounceTimeoutRef; // Cast the timeout correctly
+      previousSearchTermRef.current = searchTerm;
+    }, 700) as unknown as DebounceTimeoutRef;
 
     return () => {
       if (debounceTimeoutRef.current) {

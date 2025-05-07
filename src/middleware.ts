@@ -1,6 +1,8 @@
 import { withAuth, NextRequestWithAuth } from 'next-auth/middleware';
 import { NextResponse } from 'next/server';
 import type { userRoleEnum } from '@/db/schema'; // Import your role enum type
+import { getToken } from 'next-auth/jwt';
+import type { NextRequest } from 'next/server';
 
 export default withAuth(
   // `withAuth` augments your `Request` with the user's token.
@@ -56,5 +58,29 @@ export const config = {
     // For example, if all ticket pages require login: '/tickets/:path*'
     // If the dashboard requires login: '/dashboard/:path*' (or just '/dashboard')
     // If the profile page requires login: '/profile'
+  ],
+};
+
+export async function quarantineMiddleware(request: NextRequest) {
+  const token = await getToken({ req: request });
+
+  // Protect admin routes
+  if (request.nextUrl.pathname.startsWith('/admin')) {
+    if (!token) {
+      return NextResponse.redirect(new URL('/auth/signin', request.url));
+    }
+
+    // Check if user has admin role
+    if (token.role !== 'admin') {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+  }
+
+  return NextResponse.next();
+}
+
+export const quarantineConfig = {
+  matcher: [
+    '/admin/:path*',
   ],
 }; 
