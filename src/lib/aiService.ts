@@ -13,9 +13,9 @@ if (!apiKey) {
 // --- Initialize Google AI Client ---
 const genAI = new GoogleGenerativeAI(apiKey);
 
-// --- Select the Gemini 1.5 Flash model ---
+// --- Select the Gemini 2.0 Flash model ---
 const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash-latest",
+    model: "gemini-2.0-flash",
 });
 
 // --- Define Valid Options Based on Schema ---
@@ -37,8 +37,10 @@ interface EmailAnalysisResult {
 // Tell the model to respond in JSON format
 const generationConfig: GenerationConfig = {
     responseMimeType: "application/json",
-    temperature: 0.6, // Adjust for creativity vs predictability (0-1)
-    // maxOutputTokens: 2048, // Set if needed, but Flash has a large default limit
+    temperature: 0.4, // Lower temperature for more consistent results
+    maxOutputTokens: 1024, // Optimize for our use case
+    topP: 0.8, // Add topP for better response quality
+    topK: 40, // Add topK for better response quality
 };
 
 // --- Configure Safety Settings ---
@@ -51,7 +53,7 @@ const safetySettings = [
 ];
 
 /**
- * Analyzes email subject and body using Gemini 1.5 Flash to extract ticket information.
+ * Analyzes email subject and body using Gemini 2.0 Flash to extract ticket information.
  * @param subject Email subject
  * @param body Email body (plain text preferred)
  * @returns A structured analysis result or null if analysis fails.
@@ -91,7 +93,7 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
     `;
 
     try {
-        console.log(`AI Service: Sending request to Gemini 1.5 Flash for subject: "${subject.substring(0, 50)}..."`);
+        console.log(`AI Service: Sending request to Gemini 2.0 Flash for subject: "${subject.substring(0, 50)}..."`);
         const result = await model.generateContent({
             contents: [{ role: "user", parts: [{ text: prompt }] }],
             generationConfig,

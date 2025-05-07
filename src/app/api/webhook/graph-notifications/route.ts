@@ -4,6 +4,7 @@ import { db } from '@/db';
 import { tickets, users, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { analyzeEmailContent } from '@/lib/aiService';
+import { processSingleEmail } from '@/lib/emailProcessor';
 
 // Constants from your process-emails route (or a shared config)
 const PROCESSED_FOLDER_NAME = process.env.PROCESSED_FOLDER_NAME || "Processed";
@@ -14,7 +15,7 @@ const DEFAULT_STATUS = ticketStatusEnum.enumValues[0]; // 'new'
 const DEFAULT_TYPE = 'General Inquiry' as typeof ticketTypeEcommerceEnum.enumValues[number];
 
 // Helper function to find or create a user based on email
-async function findOrCreateUserWebhook(senderEmail: string, senderName?: string | null): Promise<number | null> {
+async function findOrCreateUserWebhook(senderEmail: string, senderName?: string | null): Promise<string | null> {
     if (!senderEmail) return null;
     
     try {
@@ -41,7 +42,7 @@ async function findOrCreateUserWebhook(senderEmail: string, senderName?: string 
 }
 
 // Helper function to create a ticket from an email
-async function createTicketFromEmail(email: any, reporterId: number) {
+async function createTicketFromEmail(email: any, reporterId: string) {
     try {
         const subject = email.subject || "No Subject";
         const body = email.body?.contentType === 'text' 
@@ -98,90 +99,49 @@ export async function POST(request: NextRequest) {
     // 2. Handle Actual Notifications
     try {
         const notificationPayload = await request.json();
-        console.log('Webhook: Received notification:', JSON.stringify(notificationPayload));
+        console.log('Webhook: Received notification'); // Don't log full payload by default
 
-        if (notificationPayload && notificationPayload.value && notificationPayload.value.length > 0) {
+        if (notificationPayload?.value?.length > 0) {
             for (const notification of notificationPayload.value) {
-                // Verify clientState if you set one during subscription
-                if (process.env.MICROSOFT_GRAPH_WEBHOOK_SECRET && 
+                // Verify clientState (Keep this)
+                if (process.env.MICROSOFT_GRAPH_WEBHOOK_SECRET &&
                     notification.clientState !== process.env.MICROSOFT_GRAPH_WEBHOOK_SECRET) {
                     console.warn('Webhook: Invalid clientState. Ignoring notification.');
                     continue;
                 }
 
                 if (notification.resource && notification.changeType === 'created') {
-                    const messageId = notification.resourceData.id;
-                    console.log(`Webhook: New email created - ID: ${messageId}`);
+                    const messageId = notification.resourceData?.id;
+                    if (!messageId) {
+                        console.warn('Webhook: Notification received without message ID.');
+                        continue;
+                    }
+                    console.log(`Webhook: Processing notification for Message ID: ${messageId}`);
 
                     // Fetch the full message details
                     const emailMessage = await graphService.getMessageById(messageId);
 
                     if (emailMessage) {
-                        const senderEmail = emailMessage.sender?.emailAddress?.address;
-                        
-                        // Skip internal emails
-                        if (senderEmail && senderEmail.endsWith(`@${INTERNAL_DOMAIN}`)) {
-                            console.log(`Webhook: Skipping email from internal domain: ${senderEmail}`);
-                            await graphService.markEmailAsRead(messageId);
-                            const processedFolderId = await graphService.createFolderIfNotExists(PROCESSED_FOLDER_NAME);
-                            if (processedFolderId) {
-                                await graphService.moveEmail(messageId, processedFolderId);
-                            }
-                            continue;
-                        }
-
-                        const reporterId = await findOrCreateUserWebhook(
-                            senderEmail || "", 
-                            emailMessage.sender?.emailAddress?.name
-                        );
-                        
-                        if (reporterId) {
-                            // Check for duplicates before creating
-                            if (emailMessage.internetMessageId) {
-                                const existingTicket = await db.query.tickets.findFirst({
-                                    where: eq(tickets.externalMessageId, emailMessage.internetMessageId),
-                                    columns: { id: true }
-                                });
-                                
-                                if (existingTicket) {
-                                    console.log(`Webhook: Ticket already exists for internetMessageId: ${emailMessage.internetMessageId}. Skipping.`);
-                                    await graphService.markEmailAsRead(messageId);
-                                    const processedFolderId = await graphService.createFolderIfNotExists(PROCESSED_FOLDER_NAME);
-                                    if (processedFolderId) {
-                                        await graphService.moveEmail(messageId, processedFolderId);
-                                    }
-                                    continue;
-                                }
-                            }
-                            
-                            await createTicketFromEmail(emailMessage, reporterId);
-                            await graphService.markEmailAsRead(messageId);
-                            const processedFolderId = await graphService.createFolderIfNotExists(PROCESSED_FOLDER_NAME);
-                            if (processedFolderId) {
-                                await graphService.moveEmail(messageId, processedFolderId);
-                            }
-                        } else {
-                            console.error(`Webhook: Could not find or create user for sender: ${senderEmail}`);
-                            // Move to error folder
-                            const errorFolderId = await graphService.createFolderIfNotExists(ERROR_FOLDER_NAME);
-                            if (errorFolderId) {
-                                await graphService.moveEmail(messageId, errorFolderId);
-                                await graphService.markEmailAsRead(messageId);
-                            }
+                        // Call the centralized processing function
+                        const result = await processSingleEmail(emailMessage);
+                        if (!result.success && !result.skipped) {
+                            // Log errors that weren't just skips
+                             console.error(`Webhook: Failed to process email ${messageId}: ${result.message}`);
                         }
                     } else {
-                        console.error(`Webhook: Could not fetch details for message ID: ${messageId}`);
+                        console.error(`Webhook: Could not fetch details for message ID: ${messageId}. Email might have been moved/deleted quickly.`);
+                        // Consider attempting to move based only on ID if an error folder exists
                     }
+                } else {
+                     console.log(`Webhook: Received notification type ${notification.changeType} for resource ${notification.resource}. Ignoring (only processing 'created').`);
                 }
             }
         }
-        
-        // Always return a 202 Accepted for notifications to prevent Graph from resending
-        return NextResponse.json({ message: 'Notification received and processed' }, { status: 202 });
-    } catch (error) {
-        console.error('Webhook: Error processing notification:', error);
-        // Return 202 even on error to avoid Graph retries for this specific notification,
-        // but log thoroughly. Persistent errors need investigation.
+
+        // Always return 202 for notifications
+        return NextResponse.json({ message: 'Notification received' }, { status: 202 });
+    } catch (error: any) {
+        console.error('Webhook: Error processing notification payload:', error);
         return NextResponse.json({ message: 'Error processing notification but accepted' }, { status: 202 });
     }
 } 

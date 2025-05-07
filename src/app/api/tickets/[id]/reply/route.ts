@@ -1,138 +1,146 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { tickets, ticketComments, users } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { z } from 'zod';
-import * as graphService from '@/lib/graphService';
-import { getServerSession } from "next-auth/next"; // Import getServerSession
-import { authOptions } from '@/lib/authOptions';   // Import your authOptions
+import { ticketComments, tickets, users, ticketAttachments } from '@/db/schema';
+import { and, eq, or, isNull } from 'drizzle-orm';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { sendTicketReplyEmail } from '@/lib/email'; // Import your email sending function
 
-const replySchema = z.object({
-  content: z.string().min(1, { message: "Reply content cannot be empty." }),
-  isInternalNote: z.boolean().optional().default(false),
-  sendAsEmail: z.boolean().optional().default(false), // New flag
-});
-
-// Helper to parse and validate ticket ID
-const getTicketId = async (params: { id: string }) => {
-  const resolvedParams = await params;
-  const id = parseInt(resolvedParams.id, 10);
-  if (isNaN(id)) {
-    throw new Error('Invalid ticket ID');
-  }
-  return id;
-};
+// Type for the request body
+interface ReplyRequestBody {
+  content: string;
+  isInternalNote?: boolean;
+  sendAsEmail?: boolean;
+  attachmentIds?: number[]; // New field for attachments
+}
 
 export async function POST(
-  request: Request,
+  request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    // --- Authentication Check ---
+    // Ensure the user is authenticated
     const session = await getServerSession(authOptions);
-    if (!session || !session.user || !session.user.id) {
-      return NextResponse.json({ error: 'Unauthorized. Please sign in to reply.' }, { status: 401 });
-    }
-    // --- End Authentication Check ---
-    
-    const ticketId = await getTicketId(params);
-    const commenterId = session.user.id; // Use authenticated user's ID
-
-    const body = await request.json();
-    const validationResult = replySchema.safeParse(body);
-
-    if (!validationResult.success) {
-      return NextResponse.json({ error: "Invalid input", details: validationResult.error.flatten().fieldErrors }, { status: 400 });
+    if (!session?.user?.email) {
+      return new NextResponse('Unauthorized', { status: 401 });
     }
 
-    const { content, isInternalNote, sendAsEmail } = validationResult.data;
+    // Get the current user
+    const currentUser = await db.query.users.findFirst({
+      where: eq(users.email, session.user.email),
+    });
 
+    if (!currentUser) {
+      return new NextResponse('User not found', { status: 404 });
+    }
+
+    const ticketId = parseInt(params.id);
+    if (isNaN(ticketId)) {
+      return new NextResponse('Invalid ticket ID', { status: 400 });
+    }
+
+    // Verify the ticket exists
     const ticket = await db.query.tickets.findFirst({
       where: eq(tickets.id, ticketId),
-      // Select fields needed for reply and original message context
-      columns: { 
-        id: true, 
-        title: true, 
-        senderEmail: true, 
-        externalMessageId: true // This should be the internetMessageId of the original email
-      } 
+      with: {
+        assignee: true,
+        reporter: true,
+      },
     });
 
     if (!ticket) {
-      return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });
+      return new NextResponse('Ticket not found', { status: 404 });
     }
 
-    let emailSentSuccessfully = false;
-    if (sendAsEmail && !isInternalNote) {
-      if (!ticket.senderEmail) {
-        return NextResponse.json({ error: 'Cannot send email reply: Original sender email not found for this ticket.' }, { status: 400 });
-      }
-      if (!ticket.externalMessageId) {
-        console.warn(`API Warning: Attempting to reply to ticket ${ticket.id} without an externalMessageId (for threading). Email might not thread correctly.`);
-        // Proceed with sending, but it might not thread
-      }
-
-      const replySubject = `Re: [Ticket #${ticket.id}] ${ticket.title}`;
-      // For constructing the original message context for graphService.sendEmailReply
-      const originalMessageContext = {
-        id: ticket.externalMessageId || undefined, // Use externalMessageId if available, else it's a new thread.
-        internetMessageId: ticket.externalMessageId || undefined,
-        // We don't have full original message headers here, but internetMessageId is key for In-Reply-To
-        // and graphService will handle constructing References if possible.
-      };
-      
-      const sentMessage = await graphService.sendEmailReply(
-        ticket.senderEmail,
-        replySubject,
-        content.replace(/\n/g, '<br>'), // Basic HTML conversion for line breaks
-        originalMessageContext,
-        process.env.MICROSOFT_GRAPH_USER_EMAIL // Ensure sending from the shared mailbox
-      );
-
-      if (sentMessage) {
-        emailSentSuccessfully = true;
-        console.log(`API Info: Email reply sent for ticket ${ticket.id}`);
-      } else {
-        console.error(`API Error: Failed to send email reply for ticket ${ticket.id}. Comment will be internal.`);
-        // Optionally, force the comment to be internal if email sending fails
-        // isInternalNote = true; // Or return an error to the user
-        return NextResponse.json({ error: 'Failed to send email reply. Comment saved as internal note if possible, or try again.' }, { status: 500 });
-      }
-    }
-
-    // Save the comment to the database
-    const [newDbComment] = await db.insert(ticketComments).values({
-      ticketId,
-      commenterId,
-      commentText: content,
-      isInternalNote,
-      isFromCustomer: false, // Replies from agents are not "from customer"
-      isOutgoingReply: sendAsEmail && emailSentSuccessfully, // Mark if it was an outgoing email
-    }).returning();
-
-    // Update the ticket's updatedAt timestamp
-    await db.update(tickets)
-      .set({ updatedAt: new Date() })
-      .where(eq(tickets.id, ticketId));
+    // Parse the request body
+    const requestBody = await request.json() as ReplyRequestBody;
     
-    // Fetch the full comment with commenter details for the response
-    const commentWithDetails = await db.query.ticketComments.findFirst({
-        where: eq(ticketComments.id, newDbComment.id),
-        with: {
-            commenter: { columns: { id: true, name: true, email: true } }
-        }
-    });
-
-    return NextResponse.json({ 
-      message: `Comment added. ${sendAsEmail && emailSentSuccessfully ? 'Email reply sent.' : (sendAsEmail ? 'Email reply failed to send.' : '')}`,
-      comment: commentWithDetails 
-    }, { status: 201 });
-
-  } catch (error) {
-    console.error(`API Error [POST /api/tickets/${params.id}/reply]:`, error);
-    if (error instanceof Error && error.message === 'Invalid ticket ID') {
-      return NextResponse.json({ error: 'Invalid ticket ID format' }, { status: 400 });
+    // Check if content is provided when not attaching files
+    if (!requestBody.content && (!requestBody.attachmentIds || requestBody.attachmentIds.length === 0)) {
+      return new NextResponse('Comment content is required if no attachments', { status: 400 });
     }
-    return NextResponse.json({ error: 'Failed to process reply.' }, { status: 500 });
+
+    // Set up comment data
+    const commentData = {
+      ticketId,
+      commentText: requestBody.content || '(Attachments only)',
+      commenterId: currentUser.id,
+      isInternalNote: requestBody.isInternalNote || false,
+      isOutgoingReply: requestBody.sendAsEmail || false,
+    };
+
+    // Insert comment
+    const [newComment] = await db.insert(ticketComments)
+      .values(commentData)
+      .returning();
+
+    // If there are attachments, associate them with this comment
+    if (requestBody.attachmentIds && requestBody.attachmentIds.length > 0) {
+      // Update attachments to be associated with this comment
+      await db.update(ticketAttachments)
+        .set({ commentId: newComment.id })
+        .where(
+          and(
+            eq(ticketAttachments.ticketId, ticketId),
+            or(
+              ...requestBody.attachmentIds.map(id => eq(ticketAttachments.id, id))
+            )
+          )
+        );
+      
+      // Fetch the updated attachments to return
+      const updatedAttachments = await db.query.ticketAttachments.findMany({
+        where: eq(ticketAttachments.commentId, newComment.id),
+      });
+
+      // Enhance the response with attachment data
+      newComment.attachments = updatedAttachments;
+    }
+
+    // If this is an email reply, send it
+    if (requestBody.sendAsEmail && ticket.senderEmail) {
+      try {
+        await sendTicketReplyEmail({
+          ticketId: ticket.id,
+          recipientEmail: ticket.senderEmail,
+          recipientName: ticket.senderName || 'Customer',
+          subject: `Re: ${ticket.title}`,
+          message: requestBody.content,
+          senderName: currentUser.name || 'Support Team',
+          // Pass attachments if any
+          attachments: requestBody.attachmentIds?.length 
+            ? await db.query.ticketAttachments.findMany({
+                where: and(
+                  eq(ticketAttachments.commentId, newComment.id),
+                  or(...requestBody.attachmentIds.map(id => eq(ticketAttachments.id, id)))
+                ),
+              })
+            : []
+        });
+        
+        // Update the ticket status to "pending_customer" if it's not already closed
+        if (ticket.status !== 'closed') {
+          await db.update(tickets)
+            .set({ 
+              status: 'pending_customer',
+              updatedAt: new Date()
+            })
+            .where(eq(tickets.id, ticketId));
+        }
+      } catch (emailError) {
+        console.error('Failed to send email reply:', emailError);
+        // We still created the comment, so don't return an error response
+        // Just add a message to the response
+        return NextResponse.json({ 
+          ...newComment, 
+          warning: 'Comment saved but email delivery failed'
+        });
+      }
+    }
+
+    return NextResponse.json(newComment);
+  } catch (error) {
+    console.error('Error creating reply:', error);
+    return new NextResponse('Internal Server Error', { status: 500 });
   }
 } 

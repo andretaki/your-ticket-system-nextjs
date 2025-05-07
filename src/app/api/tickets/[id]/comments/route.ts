@@ -3,8 +3,7 @@ import { db } from '@/db';
 import { ticketComments, tickets, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { getServerSession } from "next-auth/next"; // Import getServerSession
-import { authOptions } from '@/lib/authOptions';   // Import your authOptions
+import { getServerSession } from "next-auth/next";
 
 // --- Zod Schema for Validation ---
 const createCommentSchema = z.object({
@@ -28,7 +27,7 @@ export async function POST(
 ) {
   try {
     // --- Authentication Check ---
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession();
     if (!session || !session.user || !session.user.id) {
       return NextResponse.json({ error: 'Unauthorized. Please sign in to comment.' }, { status: 401 });
     }

@@ -4,7 +4,6 @@ import { tickets, users, ticketPriorityEnum, ticketStatusEnum } from '@/db/schem
 import { eq, desc, asc, and, or, ilike, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getServerSession } from "next-auth/next";
-import { authOptions } from '@/lib/authOptions';
 
 // --- Zod Schema for Validation ---
 const createTicketSchema = z.object({
@@ -27,7 +26,7 @@ export async function GET(request: NextRequest) {
     // --- Extract Filters ---
     const statusFilter = searchParams.get('status');
     const priorityFilter = searchParams.get('priority');
-    const assigneeIdFilter = searchParams.get('assigneeId'); // Filter by assignee ID
+    const assigneeIdFilter = searchParams.get('assigneeId'); // Filter by assignee ID (string UUID)
     const searchTerm = searchParams.get('search');
 
     // --- Extract Sorting ---
@@ -45,8 +44,9 @@ export async function GET(request: NextRequest) {
     if (assigneeIdFilter) {
       if (assigneeIdFilter === 'unassigned') {
         conditions.push(sql`${tickets.assigneeId} is null`);
-      } else if (!isNaN(parseInt(assigneeIdFilter))) {
-        conditions.push(eq(tickets.assigneeId, parseInt(assigneeIdFilter)));
+      } else {
+        // Assuming assigneeIdFilter is the UUID string if not 'unassigned'
+        conditions.push(eq(tickets.assigneeId, assigneeIdFilter));
       }
     }
     if (searchTerm) {
@@ -78,7 +78,9 @@ export async function GET(request: NextRequest) {
         orderByClause = [orderDirection(tickets.priority)];
         break;
       case 'assignee':
-        // Sorting by assignee requires a join, so we'll sort by assignee ID as a fallback
+        // Sorting by assignee name requires a join or subquery, which is more complex.
+        // Sorting by assigneeId (UUID string) might not be ideal for user display.
+        // We'll sort by assignee ID for now, acknowledging it might not be alphabetical.
         orderByClause = [orderDirection(tickets.assigneeId)];
         break;
       case 'updatedAt':
@@ -106,16 +108,18 @@ export async function GET(request: NextRequest) {
         description: true, // Include description for search
         orderNumber: true, // Include order number for search
         trackingNumber: true,
-        assigneeId: true, // Needed for filtering
+        assigneeId: true, // Needed for filtering and relation
+        reporterId: true, // Needed for relation
         type: true, // Include ticket type
       },
       with: {
-        assignee: { columns: { id: true, name: true, email: true } },
-        reporter: { columns: { id: true, name: true, email: true } }
+        assignee: { columns: { id: true, name: true, email: true } }, // Ensure User ID is fetched
+        reporter: { columns: { id: true, name: true, email: true } } // Ensure User ID is fetched
       },
     });
 
     // --- Format Response ---
+    // Map data to ensure consistent shape and convert dates
     const responseData = filteredTickets.map(t => ({
       id: t.id,
       title: t.title,
@@ -125,11 +129,11 @@ export async function GET(request: NextRequest) {
       createdAt: t.createdAt.toISOString(), // Send as ISO string
       updatedAt: t.updatedAt.toISOString(),
       assigneeName: t.assignee?.name ?? 'Unassigned',
-      assigneeId: t.assignee?.id,
-      assigneeEmail: t.assignee?.email,
+      assigneeId: t.assignee?.id ?? null, // Explicitly null if no assignee
+      assigneeEmail: t.assignee?.email ?? null,
       reporterName: t.reporter?.name ?? 'Unknown',
-      reporterId: t.reporter?.id,
-      reporterEmail: t.reporter?.email,
+      reporterId: t.reporter?.id ?? null, // Explicitly null if no reporter (shouldn't happen based on schema)
+      reporterEmail: t.reporter?.email ?? null,
       senderEmail: t.senderEmail,
       senderName: t.senderName,
       description: t.description,
@@ -149,7 +153,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: Request) {
   try {
     // --- Authentication Check ---
-    const session = await getServerSession(authOptions);
+    const session = await getServerSession();
     if (!session || !session.user || !session.user.id) {
       return NextResponse.json({ error: 'Unauthorized. Please sign in to create a ticket.' }, { status: 401 });
     }
@@ -166,15 +170,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid input", details: errors }, { status: 400 });
     }
 
-    const { 
-      title, 
-      description, 
-      assigneeEmail, 
-      priority, 
+    const {
+      title,
+      description,
+      assigneeEmail,
+      priority,
       status,
       senderEmail,
       senderName,
-      externalMessageId 
+      externalMessageId
     } = validationResult.data;
 
     // Initialize assigneeId as null (text type in schema)
@@ -188,11 +192,11 @@ export async function POST(request: Request) {
         // If assignee is specified but not found, return an error
         return NextResponse.json({ error: `Assignee with email "${assigneeEmail}" not found` }, { status: 404 });
       }
-      assigneeId = assignee.id;
+      assigneeId = assignee.id; // Drizzle schema expects string for text type
     }
 
     // User ID from session is already string which matches schema
-    const reporterId = session.user.id; 
+    const reporterId = session.user.id;
 
     // --- Create Ticket ---
     const [newTicket] = await db.insert(tickets).values({
@@ -218,4 +222,4 @@ export async function POST(request: Request) {
     // Add check for specific DB errors if necessary (e.g., unique constraints)
     return NextResponse.json({ error: 'Failed to create ticket' }, { status: 500 });
   }
-} 
+}

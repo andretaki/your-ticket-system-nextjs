@@ -11,7 +11,7 @@ import {
 } from '@/db/schema';
 import bcrypt from 'bcryptjs';
 import type { AdapterUser } from '@auth/core/adapters';
-import type { Session, User, Account, Profile } from 'next-auth';
+import type { Session, User, Account, Profile, AuthOptions, SessionStrategy } from 'next-auth';
 import type { JWT } from 'next-auth/jwt';
 
 // This is the shape of the user object your `authorize` callback will return
@@ -53,7 +53,7 @@ declare module 'next-auth/jwt' {
   }
 }
 
-export const authOptions = {
+export const authOptions: AuthOptions = {
   adapter: DrizzleAdapter(db, {
     usersTable: users,
     accountsTable: accounts,
@@ -90,7 +90,7 @@ export const authOptions = {
     })
   ],
   session: {
-    strategy: 'jwt',
+    strategy: 'jwt' as SessionStrategy,
   },
   callbacks: {
     async jwt({ token, user }: { token: JWT; user?: User }) {

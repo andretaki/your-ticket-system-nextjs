@@ -13,6 +13,17 @@ interface BaseUser {
   email: string;
 }
 
+interface AttachmentData {
+  id: number;
+  filename: string;
+  originalFilename: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedAt: string;
+  uploaderId?: number;
+  uploader?: BaseUser;
+}
+
 interface CommentData {
   id: number;
   commentText: string; // Ensure this matches schema column name
@@ -21,6 +32,7 @@ interface CommentData {
   isInternalNote: boolean;
   isFromCustomer: boolean;
   isOutgoingReply?: boolean; // Added - Mark if this comment was sent as email
+  attachments?: AttachmentData[]; // Attachments for this comment
 }
 
 interface TicketData {
@@ -41,6 +53,7 @@ interface TicketData {
   senderName: string | null;
   externalMessageId: string | null; // Added for threading context
   comments: CommentData[];
+  attachments?: AttachmentData[]; // Attachments directly on the ticket
 }
 
 interface TicketViewClientProps {
@@ -69,6 +82,58 @@ const getPriorityClass = (priority: string) => {
   }
 };
 
+// Helper component to render file attachments
+interface AttachmentListProps {
+  attachments?: AttachmentData[];
+  title?: string;
+}
+
+const AttachmentList: React.FC<AttachmentListProps> = ({ attachments, title }) => {
+  if (!attachments || attachments.length === 0) return null;
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const getFileIcon = (mimeType: string): string => {
+    if (mimeType.startsWith('image/')) return 'fa-file-image';
+    if (mimeType === 'application/pdf') return 'fa-file-pdf';
+    if (mimeType.includes('word') || mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') return 'fa-file-word';
+    if (mimeType.includes('excel') || mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') return 'fa-file-excel';
+    if (mimeType.includes('powerpoint') || mimeType === 'application/vnd.openxmlformats-officedocument.presentationml.presentation') return 'fa-file-powerpoint';
+    if (mimeType.includes('zip') || mimeType.includes('compressed')) return 'fa-file-archive';
+    return 'fa-file';
+  };
+
+  return (
+    <div className="attachment-list mb-3">
+      {title && <div className="attachment-header mb-2 text-muted"><i className="fas fa-paperclip me-1"></i>{title}</div>}
+      <div className="list-group">
+        {attachments.map(attachment => (
+          <a
+            key={attachment.id}
+            href={`/api/attachments/${attachment.id}/download`}
+            className="list-group-item list-group-item-action d-flex align-items-center"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <i className={`fas ${getFileIcon(attachment.mimeType)} text-primary me-2`}></i>
+            <div className="flex-grow-1 text-truncate">
+              {attachment.originalFilename}
+              <small className="d-block text-muted">
+                {formatFileSize(attachment.fileSize)} • {format(new Date(attachment.uploadedAt), 'PP')}
+              </small>
+            </div>
+            <i className="fas fa-download ms-2"></i>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export default function TicketViewClient({ initialTicket }: TicketViewClientProps) {
   const [ticket, setTicket] = useState<TicketData>(initialTicket);
   const [loading, setLoading] = useState(false);
@@ -77,6 +142,25 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
   const [isInternalNote, setIsInternalNote] = useState(false);
   const [sendAsEmail, setSendAsEmail] = useState(false); // State for the new checkbox
   const [submitDisabled, setSubmitDisabled] = useState(false);
+  const [files, setFiles] = useState<File[]>([]); // State for file attachments
+  
+  // File input reference
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Handle file input change
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setFiles(Array.from(e.target.files));
+    }
+  };
+
+  // Function to clear file input
+  const clearFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    setFiles([]);
+  };
 
   // Keep internal note and send as email mutually exclusive
   useEffect(() => {
@@ -121,17 +205,35 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
   // Handle form submission for new comments
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newComment.trim()) return;
+    if (!newComment.trim() && files.length === 0) return;
 
     setSubmitDisabled(true);
     setError(null);
 
     try {
-      // Use the new /reply endpoint
+      // If we have files to upload, handle them first
+      let newAttachments: AttachmentData[] = [];
+      if (files.length > 0) {
+        const formData = new FormData();
+        files.forEach(file => {
+          formData.append('files', file);
+        });
+
+        // Upload attachments
+        const attachmentResponse = await axios.post(
+          `/api/tickets/${ticket.id}/attachments`,
+          formData
+        );
+        newAttachments = attachmentResponse.data;
+        clearFileInput();
+      }
+
+      // Now use the /reply endpoint
       const response = await axios.post(`/api/tickets/${ticket.id}/reply`, {
         content: newComment.trim(),
         isInternalNote,
-        sendAsEmail // Send the new flag
+        sendAsEmail, // Send the new flag
+        attachmentIds: newAttachments.map(a => a.id) // Include attachment IDs if any
       });
       
       console.log("Reply API response:", response.data);
@@ -186,6 +288,19 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
     } finally {
       setLoading(false);
     }
+  };
+
+  // Helper function to determine file icon class based on MIME type
+  const getFileIconClass = (mimeType?: string): string => {
+    if (!mimeType) return 'fa-file';
+    if (mimeType.startsWith('image/')) return 'fa-file-image';
+    if (mimeType === 'application/pdf') return 'fa-file-pdf';
+    if (mimeType.includes('word')) return 'fa-file-word';
+    if (mimeType.includes('excel')) return 'fa-file-excel';
+    if (mimeType.includes('powerpoint')) return 'fa-file-powerpoint';
+    if (mimeType.includes('zip') || mimeType.includes('archive')) return 'fa-file-archive';
+    if (mimeType.startsWith('text/')) return 'fa-file-alt';
+    return 'fa-file';
   };
 
   return (
@@ -244,6 +359,14 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
                 <p className="text-muted fst-italic">No description provided.</p>
               )}
 
+              {/* Display ticket attachments */}
+              {ticket.attachments && ticket.attachments.length > 0 && (
+                <AttachmentList 
+                  attachments={ticket.attachments} 
+                  title="Ticket Attachments" 
+                />
+              )}
+
               {(ticket.orderNumber || ticket.trackingNumber) && (
                 <div className="order-details mt-4">
                   <h3 className="h6 mb-3">Order Information</h3>
@@ -278,40 +401,57 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
               {/* Comment List */}
               {ticket.comments.length > 0 ? (
                 <div className="comments-list mb-4">
-                  {ticket.comments.map((comment) => (
-                    <div
-                      key={comment.id}
-                      className={`comment-item p-3 mb-3 border rounded ${
-                        comment.isInternalNote ? 'border-warning bg-light fst-italic' :
-                        comment.isOutgoingReply ? 'border-info bg-light-info' : // Style outgoing replies
-                        'border-light' // Standard incoming/manual
-                      }`}
-                    >
-                      <div className="d-flex justify-content-between align-items-center mb-2">
-                        <div className="commenter d-flex align-items-center">
-                          <strong>
-                            {comment.commenter?.name ||
-                              (comment.isFromCustomer ? 'Customer' : 'System/Agent')}
-                          </strong>
-                          {comment.isInternalNote && (
-                            <span className="badge bg-warning text-dark ms-2">Internal Note</span>
-                          )}
-                          {comment.isOutgoingReply && (
-                            <span className="badge bg-info text-dark ms-2" title="Sent as email"><i className="fas fa-paper-plane"></i> Sent</span>
-                          )}
-                          {comment.isFromCustomer && (
-                            <span className="badge bg-success ms-2" title="Received via Email"><i className="fas fa-envelope"></i> Received</span>
-                          )}
+                  {ticket.comments.map((comment) => {
+                    // Determine classes based on comment type
+                    let itemClasses = 'comment-item p-3 mb-3 border rounded shadow-sm'; // Base classes + subtle shadow
+                    let badge = null;
+                    let icon = null;
+
+                    if (comment.isInternalNote) {
+                        itemClasses += ' border-warning bg-warning-subtle fst-italic'; // Lighter yellow, italic
+                        badge = <span className="badge bg-warning text-dark ms-2">Internal Note</span>;
+                        icon = <i className="fas fa-lock me-2 text-warning"></i>;
+                    } else if (comment.isOutgoingReply) {
+                        itemClasses += ' border-info bg-info-subtle'; // Lighter blue for sent
+                        badge = <span className="badge bg-info text-dark ms-2" title="Sent as email"><i className="fas fa-paper-plane"></i> Sent</span>;
+                        icon = <i className="fas fa-paper-plane me-2 text-info"></i>;
+                    } else if (comment.isFromCustomer) {
+                        itemClasses += ' border-success bg-success-subtle'; // Lighter green for received
+                        badge = <span className="badge bg-success ms-2" title="Received via Email"><i className="fas fa-envelope"></i> Received</span>;
+                        icon = <i className="fas fa-envelope me-2 text-success"></i>;
+                    } else {
+                        // Standard manual comment by an agent
+                        itemClasses += ' border-light bg-white'; // Simple white background
+                        icon = <i className="fas fa-user-edit me-2 text-secondary"></i>;
+                    }
+
+                    return (
+                        <div key={comment.id} className={itemClasses}>
+                            <div className="d-flex justify-content-between align-items-center mb-2">
+                                <div className="commenter d-flex align-items-center">
+                                    {icon} {/* Add the icon */}
+                                    <strong>
+                                        {comment.commenter?.name || (comment.isFromCustomer ? 'Customer' : 'System/Agent')}
+                                    </strong>
+                                    {badge} {/* Display the determined badge */}
+                                </div>
+                                <small className="text-muted">
+                                    {format(new Date(comment.createdAt), 'PPp')} {/* Use PPp for Date and Time */}
+                                </small>
+                            </div>
+                            <div className="comment-text pt-1" style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+                                {comment.commentText}
+                            </div>
+                            
+                            {/* Display attachments for this comment */}
+                            {comment.attachments && comment.attachments.length > 0 && (
+                              <div className="comment-attachments mt-3">
+                                <AttachmentList attachments={comment.attachments} />
+                              </div>
+                            )}
                         </div>
-                        <small className="text-muted">
-                          {format(new Date(comment.createdAt), 'PPp')}
-                        </small>
-                      </div>
-                      <div className="comment-text" style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
-                        {comment.commentText}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <p className="text-muted fst-italic">No comments yet.</p>
@@ -321,20 +461,71 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
               <form onSubmit={handleCommentSubmit} className="mt-4 border-top pt-3">
                 <div className="mb-3">
                   <label htmlFor="commentText" className="form-label fw-bold">
-                    Add a Comment / Reply
+                    Add Reply / Note
                   </label>
                   <textarea
                     id="commentText"
-                    className="form-control"
-                    rows={4}
+                    className="form-control form-control-lg"
+                    rows={5}
                     value={newComment}
                     onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setNewComment(e.target.value)}
                     placeholder="Type your comment here..."
-                    required
                   ></textarea>
                 </div>
-                <div className="d-flex justify-content-between align-items-center">
-                  <div>
+
+                {/* Enhanced File Attachment Section */}
+                <div className="mb-3">
+                  <label htmlFor="fileAttachment" className="form-label">
+                    <i className="fas fa-paperclip me-1"></i> Attach Files
+                  </label>
+                  <input
+                    type="file"
+                    id="fileAttachment"
+                    className="form-control form-control-sm"
+                    multiple
+                    onChange={handleFileChange}
+                    ref={fileInputRef}
+                    disabled={submitDisabled}
+                  />
+                  {files.length > 0 && (
+                    <div className="selected-files-preview mt-2 p-2 border rounded bg-light-subtle">
+                      <small className="d-block mb-1 fw-medium text-muted">Selected files:</small>
+                      <ul className="list-unstyled mb-0">
+                        {Array.from(files).map((file, index) => (
+                          <li key={index} className="d-flex justify-content-between align-items-center py-1 border-bottom">
+                            <div className="d-flex align-items-center text-truncate">
+                              <i className={`fas ${getFileIconClass(file.type)} me-2 text-primary`} style={{ fontSize: '1.1rem' }}></i>
+                              <span className="text-truncate" title={file.name}>{file.name}</span>
+                              <small className="ms-2 text-muted">({(file.size / 1024).toFixed(1)} KB)</small>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-outline-danger p-0"
+                              style={{ lineHeight: 1, width: '24px', height: '24px' }}
+                              onClick={() => {
+                                const newFiles = [...files];
+                                newFiles.splice(index, 1);
+                                setFiles(newFiles);
+                                if (fileInputRef.current && newFiles.length === 0) { // Clear input if all files removed
+                                    fileInputRef.current.value = '';
+                                }
+                              }}
+                              title="Remove file"
+                            >
+                              <i className="fas fa-times"></i>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <small className="form-text text-muted mt-1 d-block">
+                    Max file size: 10MB. Allowed types: common images, documents, PDFs, zip.
+                  </small>
+                </div>
+
+                <div className="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                  <div className="comment-options d-flex gap-3">
                     <div className="form-check form-check-inline">
                       <input
                         className="form-check-input"
@@ -342,13 +533,11 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
                         id="internalNoteCheck"
                         checked={isInternalNote}
                         onChange={(e: React.ChangeEvent<HTMLInputElement>) => setIsInternalNote(e.target.checked)}
-                        disabled={sendAsEmail} // Disable if sending email
+                        disabled={sendAsEmail || submitDisabled}
                       />
-                      <label className="form-check-label" htmlFor="internalNoteCheck">
-                        Internal note
-                      </label>
+                      <label className="form-check-label" htmlFor="internalNoteCheck">Internal Note</label>
                     </div>
-                    {ticket.senderEmail && ( // Only show 'Send as Email' if there's a sender email
+                    {ticket.senderEmail && (
                       <div className="form-check form-check-inline">
                         <input
                           className="form-check-input"
@@ -356,20 +545,22 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
                           id="sendAsEmailCheck"
                           checked={sendAsEmail}
                           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSendAsEmail(e.target.checked)}
-                          disabled={isInternalNote} // Disable if internal note
+                          disabled={isInternalNote || submitDisabled}
                         />
-                        <label className="form-check-label" htmlFor="sendAsEmailCheck">
-                          Send as Email
-                        </label>
+                        <label className="form-check-label" htmlFor="sendAsEmailCheck">Send as Email</label>
                       </div>
                     )}
                   </div>
                   <button
                     type="submit"
-                    className="btn btn-primary"
-                    disabled={submitDisabled || !newComment.trim()}
+                    className="btn btn-primary px-4"
+                    disabled={submitDisabled || (!newComment.trim() && files.length === 0)}
                   >
-                    {submitDisabled ? 'Submitting...' : (sendAsEmail ? 'Send & Save' : 'Save Comment')}
+                    {submitDisabled ? (
+                      <><span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Submitting...</>
+                    ) : (
+                      sendAsEmail ? <><i className="fas fa-paper-plane me-1"></i> Send & Save</> : <><i className="fas fa-save me-1"></i> Save Comment</>
+                    )}
                   </button>
                 </div>
               </form>
@@ -417,44 +608,62 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
               <h3 className="h5 mb-0">Ticket Information</h3>
             </div>
             <div className="card-body">
-              <table className="table table-sm table-borderless"> {/* Borderless for cleaner look */}
-                <tbody>
-                  <tr>
-                    <th style={{width: '30%'}}>Assignee:</th>
-                    <td>{ticket.assignee?.name || 'Unassigned'}</td>
-                  </tr>
-                  <tr>
-                    <th>Reporter:</th>
-                    <td>{ticket.reporter?.name || ticket.senderName || ticket.senderEmail || 'Unknown'}</td>
-                  </tr>
-                  {ticket.senderEmail && (
-                    <tr>
-                      <th>Sender:</th>
-                      <td>{ticket.senderName ? `${ticket.senderName} <${ticket.senderEmail}>` : ticket.senderEmail}</td>
-                    </tr>
-                  )}
-                  <tr>
-                    <th>Created:</th>
-                    <td>{format(new Date(ticket.createdAt), 'PPp')}</td>
-                  </tr>
-                  <tr>
-                    <th>Updated:</th>
-                    <td>{format(new Date(ticket.updatedAt), 'PPp')}</td>
-                  </tr>
-                  <tr>
-                    <th>Priority:</th>
-                    <td>
-                      <span className={getPriorityClass(ticket.priority)}>{ticket.priority}</span>
-                    </td>
-                  </tr>
-                  {ticket.type && (
-                    <tr>
-                      <th>Type:</th>
-                      <td>{ticket.type}</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+              <div className="mb-3"> {/* Assignee */}
+                <strong className="d-block text-muted small text-uppercase">
+                  <i className="fas fa-user-tag me-1 text-primary"></i>Assignee
+                </strong>
+                <span>{ticket.assignee?.name || <span className="text-muted fst-italic">Unassigned</span>}</span>
+                {ticket.assignee?.email && (
+                    <small className="d-block text-muted">{ticket.assignee.email}</small>
+                )}
+              </div>
+
+              <div className="mb-3"> {/* Reporter */}
+                <strong className="d-block text-muted small text-uppercase">
+                  <i className="fas fa-user-edit me-1 text-success"></i>Reporter
+                </strong>
+                <span>{ticket.reporter?.name || ticket.senderName || <span className="text-muted fst-italic">Unknown</span>}</span>
+                {/* Show sender email if reporter is not an internal user */}
+                {(ticket.reporter?.email || ticket.senderEmail) && (
+                    <small className="d-block text-muted">{ticket.reporter?.email || ticket.senderEmail}</small>
+                )}
+              </div>
+
+              <div className="mb-3"> {/* Priority */}
+                <strong className="d-block text-muted small text-uppercase">
+                  <i className="fas fa-exclamation-triangle me-1 text-warning"></i>Priority
+                </strong>
+                <span className={getPriorityClass(ticket.priority)}>{ticket.priority}</span>
+              </div>
+
+              {ticket.type && ( /* Type (Optional) */
+                <div className="mb-3">
+                  <strong className="d-block text-muted small text-uppercase">
+                    <i className="fas fa-tag me-1 text-secondary"></i>Type
+                  </strong>
+                  <span>{ticket.type}</span>
+                </div>
+              )}
+
+              <hr className="my-3" />
+
+              <div className="mb-3"> {/* Created At */}
+                  <strong className="d-block text-muted small text-uppercase">
+                      <i className="far fa-calendar-plus me-1"></i>Created
+                  </strong>
+                  <span title={new Date(ticket.createdAt).toLocaleString()}> {/* Tooltip with exact time */}
+                      {formatDistanceToNow(new Date(ticket.createdAt), { addSuffix: true })}
+                  </span>
+              </div>
+
+              <div> {/* Updated At */}
+                <strong className="d-block text-muted small text-uppercase">
+                  <i className="far fa-calendar-check me-1"></i>Last Updated
+                </strong>
+                <span title={new Date(ticket.updatedAt).toLocaleString()}> {/* Tooltip with exact time */}
+                  {formatDistanceToNow(new Date(ticket.updatedAt), { addSuffix: true })}
+                </span>
+              </div>
             </div>
           </div>
         </div>

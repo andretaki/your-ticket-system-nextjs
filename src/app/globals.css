@@ -91,3 +91,120 @@ td {
 .high-priority {
   color: red;
 }
+
+/* ---------------------------------------------------
+  SORTABLE HEADERS & FILTER STYLES
+----------------------------------------------------- */
+
+.filters-bar label {
+  font-weight: 500; /* Make filter labels slightly bolder */
+  font-size: 0.875rem; /* Smaller labels for compact bar */
+}
+
+.sortable-header {
+  cursor: pointer;
+  transition: background-color 0.2s ease-in-out;
+  white-space: nowrap; /* Prevent header text from wrapping */
+}
+
+.sortable-header:hover {
+  background-color: #e9ecef; /* Slightly darker hover for Bootstrap light theme */
+}
+
+.sortable-header .fas { /* Font Awesome sort icons */
+  opacity: 0.4; /* Make default icons more subtle */
+  font-size: 0.8em;
+  transition: opacity 0.2s ease-in-out;
+  margin-left: 0.3rem;
+}
+
+.sortable-header:hover .fas {
+  opacity: 0.7;
+}
+
+.sortable-header .fa-sort-down,
+.sortable-header .fa-sort-up {
+  opacity: 1; /* Active sort icons fully visible */
+}
+
+/* Ensure Bootstrap's subtle background is defined, if not using BS 5.3+ by default */
+.bg-light-subtle {
+  background-color: #fcfcfd !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .bg-light-subtle {
+    background-color: #343a40 !important; /* Adjust for dark theme if needed */
+  }
+}
+
+/* ---------------------------------------------------
+  COMMENT & ATTACHMENT STYLES
+----------------------------------------------------- */
+
+/* For TicketViewClient Attachments */
+.selected-files-preview .list-unstyled li {
+  background-color: transparent; /* Make list items blend with parent bg */
+  border-bottom: 1px solid var(--bs-border-color-translucent) !important; /* Subtle separator */
+}
+
+.selected-files-preview .list-unstyled li:last-child {
+  border-bottom: none !important;
+}
+
+.comment-attachments .list-group-item {
+  font-size: 0.9rem;
+}
+
+.comment-attachments .list-group-item i.fa-download {
+  opacity: 0.6;
+  transition: opacity 0.2s ease-in-out;
+}
+
+.comment-attachments .list-group-item:hover i.fa-download {
+  opacity: 1;
+}
+
+/* Subtle background colors for different comment types */
+.bg-light-subtle {
+  background-color: #fcfcfd !important;
+}
+
+.bg-warning-subtle {
+  background-color: #fff9e0 !important; /* Light yellow */
+}
+
+.border-warning {
+  border-color: #ffe480 !important;
+}
+
+.bg-info-subtle {
+  background-color: #e7f5ff !important; /* Light blue */
+}
+
+.border-info {
+  border-color: #79c6f7 !important;
+}
+
+.bg-success-subtle {
+  background-color: #e6ffed !important; /* Light green */
+}
+
+.border-success {
+  border-color: #89d9a2 !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .bg-light-subtle {
+    background-color: #1c1c1c !important;
+  }
+  .bg-warning-subtle {
+    background-color: #332700 !important;
+  }
+  .bg-info-subtle {
+    background-color: #1c2933 !important;
+  }
+  .bg-success-subtle {
+    background-color: #0c2a12 !important;
+  }
+}

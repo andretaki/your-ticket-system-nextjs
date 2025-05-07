@@ -71,68 +71,68 @@ export async function markEmailAsRead(messageId: string): Promise<void> {
  * @param messageId The ID of the email to move
  * @param destinationFolderId The ID of the destination folder
  */
-export async function moveEmail(messageId: string, destinationFolderId: string): Promise<void> {
-  try {
-    await graphClient
-      .api(`/users/${userEmail}/messages/${messageId}/move`)
-      .post({
-        destinationId: destinationFolderId
-      });
-  } catch (error) {
-    console.error(`Error moving email ${messageId} to folder ${destinationFolderId}:`, error);
-    throw error;
-  }
-}
+// export async function moveEmail(messageId: string, destinationFolderId: string): Promise<void> {
+//   try {
+//     await graphClient
+//       .api(`/users/${userEmail}/messages/${messageId}/move`)
+//       .post({
+//         destinationId: destinationFolderId
+//       });
+//   } catch (error) {
+//     console.error(`Error moving email ${messageId} to folder ${destinationFolderId}:`, error);
+//     throw error;
+//   }
+// }
 
 /**
  * Get the ID of a mail folder by name
  * @param folderName The name of the folder to find
  * @returns The folder ID, or null if not found
  */
-export async function getFolderId(folderName: string): Promise<string | null> {
-  try {
-    const response = await graphClient
-      .api(`/users/${userEmail}/mailFolders`)
-      .filter(`displayName eq '${folderName}'`)
-      .get();
+// export async function getFolderId(folderName: string): Promise<string | null> {
+//   try {
+//     const response = await graphClient
+//       .api(`/users/${userEmail}/mailFolders`)
+//       .filter(`displayName eq '${folderName}'`)
+//       .get();
 
-    const folders = response.value as MailFolder[];
-    if (folders && folders.length > 0) {
-      return folders[0].id || null;
-    }
-    return null;
-  } catch (error) {
-    console.error(`Error finding folder ID for "${folderName}":`, error);
-    throw error;
-  }
-}
+//     const folders = response.value as MailFolder[];
+//     if (folders && folders.length > 0) {
+//       return folders[0].id || null;
+//     }
+//     return null;
+//   } catch (error) {
+//     console.error(`Error finding folder ID for "${folderName}":`, error);
+//     throw error;
+//   }
+// }
 
 /**
  * Create a mail folder if it doesn't exist
  * @param folderName The name of the folder to create
  * @returns The ID of the created or existing folder
  */
-export async function createFolderIfNotExists(folderName: string): Promise<string> {
-  try {
-    // First check if folder exists
-    const existingId = await getFolderId(folderName);
-    if (existingId) {
-      return existingId;
-    }
+// export async function createFolderIfNotExists(folderName: string): Promise<string> {
+//   try {
+//     // First check if folder exists
+//     const existingId = await getFolderId(folderName);
+//     if (existingId) {
+//       return existingId;
+//     }
 
-    // Create folder if it doesn't exist
-    const response = await graphClient
-      .api(`/users/${userEmail}/mailFolders`)
-      .post({
-        displayName: folderName
-      });
+//     // Create folder if it doesn't exist
+//     const response = await graphClient
+//       .api(`/users/${userEmail}/mailFolders`)
+//       .post({
+//         displayName: folderName
+//       });
 
-    return response.id;
-  } catch (error) {
-    console.error(`Error creating folder "${folderName}":`, error);
-    throw error;
-  }
-}
+//     return response.id;
+//   } catch (error) {
+//     console.error(`Error creating folder "${folderName}":`, error);
+//     throw error;
+//   }
+// }
 
 /**
  * Sends an email reply using Microsoft Graph API.

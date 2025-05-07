@@ -1,6 +1,6 @@
 // src/db/schema.ts
-import { serial, text, timestamp, varchar, pgEnum, integer, boolean, unique, pgSchema, primaryKey } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm'; // sql import removed as it wasn't used directly here
+import { serial, text, timestamp, varchar, pgEnum, integer, boolean, unique, pgSchema, primaryKey, check } from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
 import crypto from 'crypto'; // For UUID generation
 
 // Define your PostgreSQL schema object
@@ -13,15 +13,14 @@ export const userRoleEnum = ticketingProdSchema.enum('user_role', ['admin', 'man
 export const ticketingRoleEnum = ticketingProdSchema.enum('ticketing_role_enum', ['Admin', 'Project Manager', 'Developer', 'Submitter', 'Viewer', 'Other']);
 export const ticketTypeEcommerceEnum = ticketingProdSchema.enum('ticket_type_ecommerce_enum', [
     'Return', 'Shipping Issue', 'Order Issue', 'New Order', 'Credit Request',
-    'COA Request', 'COC Request', 'SDS Request', 'Quote Request', 'General Inquiry', 'Test Entry'
+    'COA Request', 'COC Request', 'SDS Request', 'Quote Request', 'Purchase Order', 'General Inquiry', 'Test Entry'
 ]);
 
 // --- Auth.js Tables (within ticketing_prod schema) ---
-// Forward declaration for users table because accounts references it and users references accounts
 export const users = ticketingProdSchema.table('users', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()), // User ID is TEXT (UUID)
   email: varchar('email', { length: 255 }).notNull().unique(),
-  password: varchar('password', { length: 255 }),
+  password: varchar('password', { length: 255 }), // Password can be null for external/OAuth users
   name: varchar('name', { length: 255 }),
   emailVerified: timestamp('email_verified', { mode: 'date' }),
   image: text('image'),
@@ -93,9 +92,12 @@ export const tickets = ticketingProdSchema.table('tickets', {
   senderEmail: varchar('sender_email', { length: 255 }),
   senderName: varchar('sender_name', { length: 255 }),
   externalMessageId: varchar('external_message_id', { length: 255 }).unique(),
+  conversationId: text('conversation_id'), // <-- Added conversationId column (nullable)
 }, (table) => {
   return {
     externalMessageIdKey: unique('tickets_mailgun_message_id_key').on(table.externalMessageId),
+    // Optional: Index on conversationId if you added it via SQL
+    conversationIdIndex: unique('idx_tickets_conversation_id').on(table.conversationId),
   };
 });
 
@@ -123,14 +125,28 @@ export const subscriptions = ticketingProdSchema.table('subscriptions', {
   notificationUrl: text('notification_url').notNull(),
   expirationDateTime: timestamp('expiration_datetime', { withTimezone: true }).notNull(),
   clientState: text('client_state'),
-  creatorId: text('creator_id').notNull(),
+  creatorId: text('creator_id').notNull(), // Changed from integer to text if creator can be system/UUID
   isActive: boolean('is_active').default(true).notNull(),
   renewalCount: integer('renewal_count').default(0).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const ticketAttachments = ticketingProdSchema.table('ticket_attachments', {
+  id: serial('id').primaryKey(),
+  filename: varchar('filename', { length: 255 }).notNull(),
+  originalFilename: varchar('original_filename', { length: 255 }).notNull(),
+  fileSize: integer('file_size').notNull(), // Size in bytes
+  mimeType: varchar('mime_type', { length: 100 }).notNull(),
+  storagePath: varchar('storage_path', { length: 500 }).notNull(), // Path to where the file is stored
+  uploadedAt: timestamp('uploaded_at', { withTimezone: true }).defaultNow().notNull(),
+  ticketId: integer('ticket_id').references(() => tickets.id, { onDelete: 'cascade' }),
+  commentId: integer('comment_id').references(() => ticketComments.id, { onDelete: 'cascade' }),
+  uploaderId: text('uploader_id').references(() => users.id, { onDelete: 'set null' }), // References TEXT user ID
+});
+
 // --- Relations ---
+// (Relations should remain largely the same, just ensure they reference the correct types)
 export const accountsRelations = relations(accounts, ({ one }) => ({
   user: one(users, { fields: [accounts.userId], references: [users.id] }),
 }));
@@ -143,6 +159,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   assignedTickets: many(tickets, { relationName: 'TicketAssignee' }),
   reportedTickets: many(tickets, { relationName: 'TicketReporter' }),
   comments: many(ticketComments, { relationName: 'UserComments' }),
+  uploadedAttachments: many(ticketAttachments, { relationName: 'AttachmentUploader' }), // Added for attachments
   accounts: many(accounts),
   sessions: many(sessions),
 }));
@@ -159,9 +176,10 @@ export const ticketsRelations = relations(tickets, ({ one, many }) => ({
     relationName: 'TicketReporter',
   }),
   comments: many(ticketComments),
+  attachments: many(ticketAttachments), // Existing relation
 }));
 
-export const ticketCommentsRelations = relations(ticketComments, ({ one }) => ({
+export const ticketCommentsRelations = relations(ticketComments, ({ one, many }) => ({
   ticket: one(tickets, {
     fields: [ticketComments.ticketId],
     references: [tickets.id],
@@ -169,6 +187,25 @@ export const ticketCommentsRelations = relations(ticketComments, ({ one }) => ({
   commenter: one(users, {
     fields: [ticketComments.commenterId],
     references: [users.id],
-    relationName: 'UserComments',
+    relationName: 'UserComments' // Corrected relation name based on usersRelations
+  }),
+  attachments: many(ticketAttachments), // Existing relation
+}));
+
+export const ticketAttachmentsRelations = relations(ticketAttachments, ({ one }) => ({
+  ticket: one(tickets, {
+    fields: [ticketAttachments.ticketId],
+    references: [tickets.id],
+    relationName: 'AttachmentTicket', // Relation name optional but good practice
+  }),
+  comment: one(ticketComments, {
+    fields: [ticketAttachments.commentId],
+    references: [ticketComments.id],
+    relationName: 'AttachmentComment', // Relation name optional
+  }),
+  uploader: one(users, {
+    fields: [ticketAttachments.uploaderId],
+    references: [users.id],
+    relationName: 'AttachmentUploader', // Use relation name defined in usersRelations
   }),
 }));
