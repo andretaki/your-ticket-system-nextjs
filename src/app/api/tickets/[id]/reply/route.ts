@@ -1,17 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { ticketComments, tickets, users, ticketAttachments } from '@/db/schema';
-import { and, eq, or, isNull } from 'drizzle-orm';
+import { and, eq, or, isNull, desc, sql } from 'drizzle-orm';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
-import { sendTicketReplyEmail } from '@/lib/email'; // Import your email sending function
+import { authOptions } from '@/lib/authOptions';
+import { sendTicketReplyEmail } from '@/lib/email';
+import { InferSelectModel } from 'drizzle-orm';
+
+// Define types for database models
+type TicketComment = InferSelectModel<typeof ticketComments>;
+type TicketAttachment = InferSelectModel<typeof ticketAttachments>;
+
+// Define type for the comment with attachments
+interface CommentWithAttachments extends TicketComment {
+  attachments?: TicketAttachment[];
+}
 
 // Type for the request body
 interface ReplyRequestBody {
   content: string;
   isInternalNote?: boolean;
   sendAsEmail?: boolean;
-  attachmentIds?: number[]; // New field for attachments
+  attachmentIds?: number[];
 }
 
 export async function POST(
@@ -39,9 +49,18 @@ export async function POST(
       return new NextResponse('Invalid ticket ID', { status: 400 });
     }
 
-    // Verify the ticket exists
+    // Verify the ticket exists AND fetch necessary fields for threading
     const ticket = await db.query.tickets.findFirst({
       where: eq(tickets.id, ticketId),
+      columns: {
+        id: true,
+        title: true,
+        senderEmail: true,
+        senderName: true,
+        status: true,
+        externalMessageId: true,
+        conversationId: true
+      },
       with: {
         assignee: true,
         reporter: true,
@@ -70,9 +89,15 @@ export async function POST(
     };
 
     // Insert comment
-    const [newComment] = await db.insert(ticketComments)
+    const [insertedComment] = await db.insert(ticketComments)
       .values(commentData)
       .returning();
+      
+    // Create a comment object that can have attachments
+    const newComment: CommentWithAttachments = {
+      ...insertedComment,
+      attachments: []
+    };
 
     // If there are attachments, associate them with this comment
     if (requestBody.attachmentIds && requestBody.attachmentIds.length > 0) {
@@ -100,6 +125,45 @@ export async function POST(
     // If this is an email reply, send it
     if (requestBody.sendAsEmail && ticket.senderEmail) {
       try {
+        // --- Determine Threading Headers ---
+        let inReplyToId: string | undefined = undefined;
+        let referencesIds: string[] = [];
+
+        // 1. Find the last message from the customer in this thread
+        const lastCustomerComment = await db.query.ticketComments.findFirst({
+          where: and(
+            eq(ticketComments.ticketId, ticketId),
+            eq(ticketComments.isFromCustomer, true),
+            // Using SQL to check for non-null externalMessageId
+            sql`${ticketComments.externalMessageId} IS NOT NULL`
+          ),
+          orderBy: [desc(ticketComments.createdAt)],
+          columns: { externalMessageId: true }
+        });
+
+        // 2. Set In-Reply-To and initial References
+        if (lastCustomerComment?.externalMessageId) {
+          inReplyToId = lastCustomerComment.externalMessageId;
+          referencesIds.push(lastCustomerComment.externalMessageId);
+        } else if (ticket.externalMessageId) {
+          // If no customer reply, reply to the original ticket email
+          inReplyToId = ticket.externalMessageId;
+          referencesIds.push(ticket.externalMessageId);
+        }
+
+        // 3. Add original ticket ID to References if it wasn't the one replied to
+        if (ticket.externalMessageId && ticket.externalMessageId !== inReplyToId) {
+          // Add original ID before the replied-to ID for standard References order
+          referencesIds.unshift(ticket.externalMessageId);
+        }
+        referencesIds = [...new Set(referencesIds)]; // Ensure uniqueness
+
+        // --- End Determine Threading Headers ---
+        console.log(`Sending Reply - In-Reply-To: ${inReplyToId}, References: ${referencesIds.join(' ')}, ConvID: ${ticket.conversationId}`);
+
+        // Get attachments for the email
+        const emailAttachments = newComment.attachments || [];
+
         await sendTicketReplyEmail({
           ticketId: ticket.id,
           recipientEmail: ticket.senderEmail,
@@ -107,15 +171,12 @@ export async function POST(
           subject: `Re: ${ticket.title}`,
           message: requestBody.content,
           senderName: currentUser.name || 'Support Team',
-          // Pass attachments if any
-          attachments: requestBody.attachmentIds?.length 
-            ? await db.query.ticketAttachments.findMany({
-                where: and(
-                  eq(ticketAttachments.commentId, newComment.id),
-                  or(...requestBody.attachmentIds.map(id => eq(ticketAttachments.id, id)))
-                ),
-              })
-            : []
+          attachments: emailAttachments,
+          // --- Pass Threading Info ---
+          inReplyToId,
+          referencesIds: referencesIds.length > 0 ? referencesIds : undefined,
+          conversationId: ticket.conversationId || undefined
+          // --- End Pass Threading Info ---
         });
         
         // Update the ticket status to "pending_customer" if it's not already closed

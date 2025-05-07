@@ -43,16 +43,31 @@ class RateLimiter {
 const rateLimiter = new RateLimiter(RATE_LIMIT, RATE_WINDOW);
 
 // --- Type Definitions for ShipStation API Response Snippets ---
-// Define interfaces based on the fields you actually need from ShipStation
+interface ShipStationOrderItem {
+    orderItemId: number;
+    lineItemKey?: string;
+    sku: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    productId?: number;
+    fulfillmentSku?: string;
+    imageUrl?: string;
+}
+
 interface ShipStationShipment {
     shipmentId: number;
     trackingNumber: string | null;
     shipDate: string; // ISO 8601 date string
     carrierCode: string | null; // e.g., 'fedex', 'ups', 'usps'
+    serviceCode?: string; // Service used (e.g., 'usps_priority')
+    packageCode?: string;
+    confirmation?: string;
+    estimatedDeliveryDate?: string; // may or may not be available
     voided: boolean;
     orderId?: number; // Added for shipments endpoint response
     orderNumber?: string; // Added for shipments endpoint response
-    // Add other fields if needed: serviceCode, packageCode, confirmation, etc.
+    // Add other fields if needed
 }
 
 interface ShipStationOrder {
@@ -60,8 +75,10 @@ interface ShipStationOrder {
     orderNumber: string;
     orderStatus: 'awaiting_payment' | 'awaiting_shipment' | 'shipped' | 'on_hold' | 'cancelled';
     customerEmail: string | null;
+    orderDate: string;
+    items?: ShipStationOrderItem[];
     shipments: ShipStationShipment[] | null; // Shipments might be null or empty
-    // Add other fields if needed: orderDate, shipTo, items, etc.
+    // Add other fields if needed
 }
 
 interface ShipStationOrderResponse {
@@ -79,14 +96,27 @@ interface ShipStationShipmentsResponse {
 }
 
 // --- Result Structure for our Service ---
+export interface OrderItem {
+    sku: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+}
+
+export interface ShipmentInfo {
+    trackingNumber: string;
+    carrier: string;
+    shipDate: string; 
+    serviceLevel?: string;
+    estimatedDelivery?: string;
+}
+
 export interface OrderTrackingInfo {
     found: boolean;
     orderStatus?: ShipStationOrder['orderStatus'];
-    shipments?: Array<{ // Simplify the shipment info we pass back
-        trackingNumber: string;
-        carrier: string;
-        shipDate: string; // Keep as string for simplicity
-    }>;
+    orderDate?: string;
+    shipments?: ShipmentInfo[];
+    items?: OrderItem[];
     errorMessage?: string; // In case of lookup errors
 }
 
@@ -129,7 +159,19 @@ export async function getOrderTrackingInfo(orderNumber: string): Promise<OrderTr
                 return {
                     found: true,
                     orderStatus: orderInfo.orderStatus,
+                    orderDate: orderInfo.orderDate,
+                    items: orderInfo.items,
                     shipments: shipmentsInfo.shipments
+                };
+            } else if (shipmentsInfo.errorMessage) {
+                // We had an error looking up shipments, include it in the response
+                console.log(`ShipStation Service: Error looking up shipments for order ${orderNumber}: ${shipmentsInfo.errorMessage}`);
+                return {
+                    found: true,
+                    orderStatus: orderInfo.orderStatus,
+                    orderDate: orderInfo.orderDate,
+                    items: orderInfo.items,
+                    errorMessage: `Order found, but error retrieving shipments: ${shipmentsInfo.errorMessage}`
                 };
             }
         }
@@ -166,26 +208,71 @@ async function getOrderInfo(orderNumber: string, authHeader: string): Promise<Or
                 },
                 params: {
                     orderNumber: orderNumber,
-                    pageSize: 1
+                    pageSize: 100, // Increase to get all orders with this number
+                    sortBy: 'OrderDate',
+                    sortDir: 'DESC' // Sort newest first
                 }
             });
 
             if (response.data && response.data.orders && response.data.orders.length > 0) {
-                const order = response.data.orders[0];
+                // Handle pagination if there are more orders
+                let allOrders = [...response.data.orders];
+                let currentPage = 1;
+                const totalPages = response.data.pages;
+                
+                // Fetch additional pages if needed
+                while (currentPage < totalPages) {
+                    await rateLimiter.waitForSlot();
+                    currentPage++;
+                    
+                    const pageResponse = await axios.get<ShipStationOrderResponse>(url, {
+                        headers: {
+                            'Authorization': authHeader,
+                            'Accept': 'application/json',
+                        },
+                        params: {
+                            orderNumber: orderNumber,
+                            pageSize: 100,
+                            page: currentPage,
+                            sortBy: 'OrderDate',
+                            sortDir: 'DESC'
+                        }
+                    });
+                    
+                    if (pageResponse.data && pageResponse.data.orders) {
+                        allOrders = [...allOrders, ...pageResponse.data.orders];
+                    }
+                }
+                
+                // Since we're sorting DESC, the first order is the newest
+                const order = allOrders[0];
                 console.log(`ShipStation Service: Found order ${order.orderId} with status ${order.orderStatus}`);
 
+                // Process shipments
                 const validShipments = (order.shipments || [])
                     .filter(shipment => !shipment.voided && shipment.trackingNumber && shipment.carrierCode)
                     .map(shipment => ({
                         trackingNumber: shipment.trackingNumber!,
                         carrier: shipment.carrierCode!,
-                        shipDate: shipment.shipDate
+                        shipDate: shipment.shipDate,
+                        serviceLevel: shipment.serviceCode,
+                        estimatedDelivery: shipment.estimatedDeliveryDate
                     }));
+
+                // Process order items
+                const orderItems = (order.items || []).map(item => ({
+                    sku: item.sku,
+                    name: item.name,
+                    quantity: item.quantity,
+                    unitPrice: item.unitPrice
+                }));
 
                 return {
                     found: true,
                     orderStatus: order.orderStatus,
-                    shipments: validShipments.length > 0 ? validShipments : undefined
+                    orderDate: order.orderDate,
+                    shipments: validShipments.length > 0 ? validShipments : undefined,
+                    items: orderItems.length > 0 ? orderItems : undefined
                 };
             } else {
                 console.log(`ShipStation Service: OrderNumber ${orderNumber} not found.`);
@@ -232,7 +319,7 @@ async function getOrderInfo(orderNumber: string, authHeader: string): Promise<Or
             }
 
             // If we've exhausted retries or it's not a rate limit error, return error info
-            return { found: false, errorMessage: `System error looking up order. Status Code: ${statusCode}` };
+            return { found: false, errorMessage: `System error looking up order. Status Code: ${statusCode || 'unknown'}. Error: ${error instanceof Error ? error.message : 'Unknown error'}` };
         }
     }
 
@@ -243,7 +330,7 @@ async function getOrderInfo(orderNumber: string, authHeader: string): Promise<Or
 /**
  * Helper function to get shipment information from the /shipments endpoint
  */
-async function getShipmentsInfo(orderNumber: string, authHeader: string): Promise<{shipments?: Array<{trackingNumber: string; carrier: string; shipDate: string}>}> {
+async function getShipmentsInfo(orderNumber: string, authHeader: string): Promise<{shipments?: ShipmentInfo[], errorMessage?: string}> {
     const url = `${SHIPSTATION_BASE_URL}/shipments`;
     let retryCount = 0;
     
@@ -259,19 +346,52 @@ async function getShipmentsInfo(orderNumber: string, authHeader: string): Promis
                 },
                 params: {
                     orderNumber: orderNumber,
-                    pageSize: 100 // Get all shipments for this order
+                    pageSize: 100, // Get all shipments for this order
+                    sortBy: 'ShipDate',
+                    sortDir: 'DESC' // Sort newest first
                 }
             });
 
             if (response.data && response.data.shipments && response.data.shipments.length > 0) {
                 console.log(`ShipStation Service: Found ${response.data.shipments.length} shipments for order ${orderNumber}`);
 
-                const validShipments = response.data.shipments
+                // Handle pagination if there are more shipments
+                let allShipments = [...response.data.shipments];
+                let currentPage = 1;
+                const totalPages = response.data.pages;
+                
+                // Fetch additional pages if needed
+                while (currentPage < totalPages) {
+                    await rateLimiter.waitForSlot();
+                    currentPage++;
+                    
+                    const pageResponse = await axios.get<ShipStationShipmentsResponse>(url, {
+                        headers: {
+                            'Authorization': authHeader,
+                            'Accept': 'application/json',
+                        },
+                        params: {
+                            orderNumber: orderNumber,
+                            pageSize: 100,
+                            page: currentPage,
+                            sortBy: 'ShipDate',
+                            sortDir: 'DESC'
+                        }
+                    });
+                    
+                    if (pageResponse.data && pageResponse.data.shipments) {
+                        allShipments = [...allShipments, ...pageResponse.data.shipments];
+                    }
+                }
+
+                const validShipments = allShipments
                     .filter(shipment => !shipment.voided && shipment.trackingNumber && shipment.carrierCode)
                     .map(shipment => ({
                         trackingNumber: shipment.trackingNumber!,
                         carrier: shipment.carrierCode!,
-                        shipDate: shipment.shipDate
+                        shipDate: shipment.shipDate,
+                        serviceLevel: shipment.serviceCode,
+                        estimatedDelivery: shipment.estimatedDeliveryDate
                     }));
 
                 return {
@@ -283,6 +403,7 @@ async function getShipmentsInfo(orderNumber: string, authHeader: string): Promis
             }
 
         } catch (error: unknown) {
+            let errorMessage = `Failed to fetch shipment data from ShipStation for order ${orderNumber}`;
             let statusCode: number | undefined;
             let retryAfter: number | undefined;
 
@@ -290,6 +411,13 @@ async function getShipmentsInfo(orderNumber: string, authHeader: string): Promis
                 const axiosError = error as AxiosError;
                 statusCode = axiosError.response?.status;
                 retryAfter = parseInt(axiosError.response?.headers?.['retry-after'] || '0', 10);
+
+                errorMessage = `${errorMessage}. Status: ${statusCode}. ${axiosError.message}`;
+                if (axiosError.response?.data) {
+                    console.error("ShipStation API Error Response:", axiosError.response.data);
+                } else {
+                    console.error("ShipStation API Error:", axiosError.message);
+                }
 
                 // Handle rate limiting (429) with retry
                 if (statusCode === 429 && retryCount < MAX_RETRIES) {
@@ -299,14 +427,26 @@ async function getShipmentsInfo(orderNumber: string, authHeader: string): Promis
                     retryCount++;
                     continue; // Try again
                 }
+            } else {
+                console.error("ShipStation Service Error:", error);
+                errorMessage = `${errorMessage}. Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            }
+
+            // Alert on API errors (e.g., 5xx, 401, potentially 429 rate limits)
+            if (!statusCode || statusCode >= 400) {
+                await alertService.trackErrorAndAlert(
+                    'ShipStationService-API',
+                    `ShipStation API shipment lookup failed for order ${orderNumber}`,
+                    { orderNumber, statusCode, retryCount, error: errorMessage }
+                );
             }
 
             console.error("ShipStation Service: Error fetching shipments", error);
-            // Return empty result on error
-            return { shipments: undefined };
+            // Return error message along with empty result
+            return { shipments: undefined, errorMessage: `System error looking up shipments. Status Code: ${statusCode || 'unknown'}` };
         }
     }
 
     console.log(`ShipStation Service: Max retries reached when fetching shipments for order ${orderNumber}`);
-    return { shipments: undefined };
+    return { shipments: undefined, errorMessage: 'Maximum retry attempts reached for ShipStation API' };
 } 

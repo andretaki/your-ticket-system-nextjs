@@ -102,16 +102,36 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
             return { success: false, message: "Missing essential info (ID, sender, or subject)", skipped: true };
         }
 
+        // --- Robust Duplicate Check (Early in the process) ---
+        if (emailMessage.internetMessageId) {
+            const existingTicket = await db.query.tickets.findFirst({
+                where: eq(tickets.externalMessageId, emailMessage.internetMessageId),
+                columns: { id: true }
+            });
+            if (existingTicket) {
+                console.log(`EmailProcessor: Skipping already processed email (found in tickets: ${existingTicket.id}) for internetMessageId: ${emailMessage.internetMessageId}`);
+                try { await graphService.markEmailAsRead(messageId); } catch(e){}
+                return { success: true, message: `Duplicate email, already processed as ticket ${existingTicket.id}`, skipped: true };
+            }
+
+            const existingComment = await db.query.ticketComments.findFirst({
+                where: eq(ticketComments.externalMessageId, emailMessage.internetMessageId),
+                columns: { id: true, ticketId: true }
+            });
+            if (existingComment) {
+                console.log(`EmailProcessor: Skipping already processed email (found in comments: ${existingComment.id} for ticket ${existingComment.ticketId}) for internetMessageId: ${emailMessage.internetMessageId}`);
+                try { await graphService.markEmailAsRead(messageId); } catch(e){}
+                return { success: true, message: `Duplicate email, already processed as comment ${existingComment.id}`, skipped: true };
+            }
+        } else {
+            console.warn(`EmailProcessor: Message ID ${messageId} missing internetMessageId. Cannot perform robust duplicate check.`);
+            // Continue processing without internetMessageId, but be aware that duplicate detection won't work properly
+        }
+        // --- End Robust Duplicate Check ---
+
         const senderEmail = emailMessage.sender.emailAddress.address;
         const senderName = emailMessage.sender.emailAddress.name;
         const subject = emailMessage.subject;
-
-        // --- Domain Check (Skip Internal) ---
-        if (senderEmail.toLowerCase().endsWith(`@${INTERNAL_DOMAIN.toLowerCase()}`)) {
-            console.log(`EmailProcessor: Skipping internal email from ${senderEmail} (Message ID: ${messageId})`);
-             try { await graphService.markEmailAsRead(messageId); } catch (e) { console.error(`EmailProcessor: Failed to mark internal email ${messageId} as read`, e); }
-            return { success: true, message: "Skipped internal email", skipped: true };
-        }
 
         // --- Threading Check ---
         console.log(`EmailProcessor: Checking threading for Message ID: ${messageId}`);
@@ -181,6 +201,18 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
             }
         }
 
+        // --- Domain Check (Skip Internal emails ONLY if not a reply to existing ticket) ---
+        if (senderEmail.toLowerCase().endsWith(`@${INTERNAL_DOMAIN.toLowerCase()}`)) {
+            // If this is a reply to an existing ticket, process it normally
+            if (existingTicketId === null) {
+                console.log(`EmailProcessor: Skipping internal email from ${senderEmail} (Message ID: ${messageId}) - not a reply to existing ticket`);
+                try { await graphService.markEmailAsRead(messageId); } catch (e) { console.error(`EmailProcessor: Failed to mark internal email ${messageId} as read`, e); }
+                return { success: true, message: "Skipped internal email", skipped: true };
+            } else {
+                console.log(`EmailProcessor: Processing internal email from ${senderEmail} as it's a reply to ticket ${existingTicketId}`);
+            }
+        }
+
         // --- Process as Reply (if existing ticket found) ---
         if (existingTicketId !== null && foundBy) {
             console.log(`EmailProcessor: Email ${messageId} is a reply to Ticket ${existingTicketId} (found by ${foundBy}). Adding as comment.`);
@@ -201,39 +233,66 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
 
             // Insert the comment
             try {
+                // Determine the flags based on the SENDER of THIS email reply
+                const isReplyFromInternal = senderEmail.toLowerCase().endsWith(`@${INTERNAL_DOMAIN.toLowerCase()}`);
+                
                 const [newComment] = await db.insert(ticketComments).values({
                     ticketId: existingTicketId,
-                    commentText: replyBody || '(Empty Body)',
-                    commenterId: replyCommenterId, // The user who sent the reply (TEXT ID)
-                    isFromCustomer: true, // Mark as from customer
-                    isInternalNote: false,
-                    isOutgoingReply: false,
-                    externalMessageId: emailMessage.internetMessageId // Store the reply's message ID
-                }).returning({ id: ticketComments.id }); // Get the new comment ID
+                    commentText: replyBody,
+                    commenterId: replyCommenterId,
+                    isFromCustomer: !isReplyFromInternal, // FALSE if sender is internal
+                    isInternalNote: false, // Email replies are not internal notes
+                    isOutgoingReply: isReplyFromInternal, // TRUE if sender is internal
+                    externalMessageId: emailMessage.internetMessageId || null,
+                }).returning({ id: ticketComments.id, ticketId: ticketComments.ticketId });
 
-                console.log(`EmailProcessor: Added comment ${newComment.id} to ticket ${existingTicketId} for email ${messageId}.`);
+                console.log(`EmailProcessor: Added comment ${newComment.id} to ticket ${existingTicketId} for reply email ${messageId}. Flags: isFromCustomer=${!isReplyFromInternal}, isOutgoingReply=${isReplyFromInternal}`);
 
-                 // Mark email as read
-                 await graphService.markEmailAsRead(messageId);
-                 console.log(`EmailProcessor: Reply email ${messageId} marked as read.`);
+                // Mark Email as Read
+                await graphService.markEmailAsRead(messageId);
+                console.log(`EmailProcessor: Reply email ${messageId} marked as read.`);
+                
+                // Emit event for the new comment
+                ticketEventEmitter.emit({
+                    type: 'comment_added',
+                    ticketId: existingTicketId,
+                    commentId: newComment.id
+                });
 
-                // Update ticket's updated_at timestamp and status to 'open'
-                 await db.update(tickets)
-                   .set({ updatedAt: new Date(), status: OPEN_STATUS }) // Set status back to 'open'
-                   .where(eq(tickets.id, existingTicketId));
-                 console.log(`EmailProcessor: Ticket ${existingTicketId} updated (timestamp, status set to open).`);
-
-                return { success: true, ticketId: existingTicketId, commentId: newComment.id, message: "Reply added as comment successfully" };
-
+                return {
+                    success: true,
+                    ticketId: existingTicketId,
+                    commentId: newComment.id,
+                    message: "Reply added to ticket successfully",
+                };
             } catch (commentError: any) {
                 console.error(`EmailProcessor: Error adding comment to ticket ${existingTicketId} for email ${messageId}:`, commentError);
-                 // Attempt to mark read even if comment insert fails
-                 try { await graphService.markEmailAsRead(messageId); } catch(e){}
-                 await alertService.trackErrorAndAlert(
-                    'EmailProcessor-CommentInsert',
-                    `Failed to insert comment for email ${messageId} into ticket ${existingTicketId}`,
-                    { error: commentError }
-                 );
+                 
+                // Specific handling for duplicate comment (unique constraint violation)
+                if (commentError.code === '23505' && 
+                    (commentError.constraint === 'ticket_comments_external_message_id_unique' || 
+                     commentError.constraint === 'ticket_comments_mailgun_message_id_key')) {
+                    
+                    console.log(`EmailProcessor: This appears to be a duplicate comment with the same externalMessageId. Marking as read and skipping.`);
+                    
+                    // Attempt to mark read even if comment insert fails
+                    try { await graphService.markEmailAsRead(messageId); } catch(e){}
+                    
+                    return {
+                        success: true,
+                        ticketId: existingTicketId,
+                        message: "Email marked as read - comment with the same ID already exists",
+                        skipped: true
+                    };
+                }
+                
+                // Attempt to mark read even if comment insert fails
+                try { await graphService.markEmailAsRead(messageId); } catch(e){}
+                await alertService.trackErrorAndAlert(
+                   'EmailProcessor-CommentInsert',
+                   `Failed to insert comment for email ${messageId} into ticket ${existingTicketId}`,
+                   { error: commentError }
+                );
                 throw commentError; // Propagate error to main catch block
             }
         }
@@ -247,21 +306,6 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
              // This case should have been caught earlier, but double-check
              try { await graphService.markEmailAsRead(messageId); } catch(e){}
              throw new Error(`User creation/lookup failed earlier for ${senderEmail}`);
-        }
-
-        // Duplicate Check (using internetMessageId of *this* email)
-        if (emailMessage.internetMessageId) {
-            const existingTicket = await db.query.tickets.findFirst({
-                where: eq(tickets.externalMessageId, emailMessage.internetMessageId),
-                columns: { id: true }
-            });
-            if (existingTicket) {
-                console.log(`EmailProcessor: Duplicate email detected (internetMessageId: ${emailMessage.internetMessageId}). Ticket ${existingTicket.id} already exists.`);
-                 try { await graphService.markEmailAsRead(messageId); } catch(e){}
-                return { success: true, message: `Duplicate email, already processed as ticket ${existingTicket.id}`, skipped: true };
-            }
-        } else {
-            console.warn(`EmailProcessor: Message ID ${messageId} missing internetMessageId. Cannot perform duplicate check.`);
         }
 
         // Extract Email Body
@@ -340,14 +384,40 @@ Alliance Chemical Support
             if (automationInfo.found) { // Now TS knows automationInfo is not null here
                 internalNoteContent += `**ShipStation Info for Order ${aiAnalysis?.orderNumber}:**\n`;
                 internalNoteContent += `Status: ${automationInfo.orderStatus}\n`;
+                
+                // Add order date if available
+                if (automationInfo.orderDate) {
+                    internalNoteContent += `Order Date: ${new Date(automationInfo.orderDate).toLocaleDateString()}\n`;
+                }
+                
+                // Add shipment information
                 if (automationInfo.shipments && automationInfo.shipments.length > 0) {
                     internalNoteContent += `Shipments:\n`;
-                    // Add type annotation for 'ship' parameter
-                    automationInfo.shipments.forEach((ship: { carrier: string; trackingNumber: string; shipDate: string }) => {
-                        internalNoteContent += `- Carrier: ${ship.carrier}, Tracking: ${ship.trackingNumber}, Shipped: ${new Date(ship.shipDate).toLocaleDateString()}\n`;
+                    automationInfo.shipments.forEach((ship) => {
+                        internalNoteContent += `- Carrier: ${ship.carrier}, Tracking: ${ship.trackingNumber}, Shipped: ${new Date(ship.shipDate).toLocaleDateString()}`;
+                        
+                        // Add service level if available
+                        if (ship.serviceLevel) {
+                            internalNoteContent += `, Service: ${ship.serviceLevel}`;
+                        }
+                        
+                        // Add estimated delivery date if available
+                        if (ship.estimatedDelivery) {
+                            internalNoteContent += `, ETA: ${new Date(ship.estimatedDelivery).toLocaleDateString()}`;
+                        }
+                        
+                        internalNoteContent += `\n`;
                     });
                 } else {
                     internalNoteContent += `Shipments: None found.\n`;
+                }
+                
+                // Add order items if available
+                if (automationInfo.items && automationInfo.items.length > 0) {
+                    internalNoteContent += `\nOrder Items:\n`;
+                    automationInfo.items.forEach((item) => {
+                        internalNoteContent += `- ${item.name} (SKU: ${item.sku}), Qty: ${item.quantity}, Price: $${item.unitPrice.toFixed(2)}\n`;
+                    });
                 }
             } else {
                 // Access errorMessage only if found is false

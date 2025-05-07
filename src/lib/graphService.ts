@@ -134,27 +134,86 @@ export async function markEmailAsRead(messageId: string): Promise<void> {
 //   }
 // }
 
+interface ThreadingInfo {
+  inReplyToId?: string | null;
+  referencesIds?: string[] | null;
+  conversationId?: string | null;
+}
+
 /**
- * Sends an email reply using Microsoft Graph API.
+ * Sends an email reply using Microsoft Graph API, using provided threading information.
  * @param toEmailAddress The recipient's email address.
  * @param subject The subject of the reply email.
- * @param htmlBody The HTML content of the reply.
- * @param originalMessage The original message object to reply/forward to, for threading.
+ * @param messageContent The HTML content of the reply.
+ * @param threadingInfo Object containing inReplyToId, referencesIds, conversationId or a Message object.
  * @param fromEmailAddress The email address to send from (e.g., your shared mailbox).
  * @returns The sent message object or null if sending fails.
  */
 export async function sendEmailReply(
   toEmailAddress: string,
   subject: string,
-  htmlBody: string,
-  originalMessage: Message, // Pass the original message for threading
-  fromEmailAddress: string = userEmail // Default to the configured userEmail
+  messageContent: string, 
+  threadingInfo: ThreadingInfo | Message,
+  fromEmailAddress: string = userEmail
 ): Promise<Message | null> {
   try {
-    if (!originalMessage.id || !originalMessage.internetMessageId) {
-      console.error('GraphService: Cannot send reply without original message ID and internetMessageId for threading.');
-      return null;
+    // --- Construct Threading Headers ---
+    const internetMessageHeaders: InternetMessageHeader[] = [];
+    
+    if ('internetMessageId' in threadingInfo) {
+      // Handle legacy Message object format for backward compatibility
+      const originalMessage = threadingInfo as Message;
+      
+      if (originalMessage.internetMessageId) {
+        internetMessageHeaders.push({
+          name: 'In-Reply-To',
+          value: `<${originalMessage.internetMessageId}>`
+        });
+        console.log(`GraphService: Setting In-Reply-To: <${originalMessage.internetMessageId}>`);
+        
+        // Add References header using existing references + current message ID
+        const existingRefs = (originalMessage.internetMessageHeaders as InternetMessageHeader[] | undefined)?.find(
+          h => h.name === 'References' || h.name === 'X-References'
+        )?.value || '';
+        
+        internetMessageHeaders.push({
+          name: 'References',
+          value: `${existingRefs} <${originalMessage.internetMessageId}>`.trim()
+        });
+        console.log(`GraphService: Setting References: ${internetMessageHeaders.find(h => h.name === 'References')?.value}`);
+      }
+    } else {
+      // Handle new ThreadingInfo interface
+      const threading = threadingInfo as ThreadingInfo;
+      
+      if (threading.inReplyToId) {
+        internetMessageHeaders.push({
+          name: 'In-Reply-To',
+          value: `<${threading.inReplyToId}>`
+        });
+        console.log(`GraphService: Setting In-Reply-To: <${threading.inReplyToId}>`);
+      }
+      
+      if (threading.referencesIds && threading.referencesIds.length > 0) {
+        const referencesValue = threading.referencesIds.map(id => `<${id}>`).join(' ');
+        internetMessageHeaders.push({
+          name: 'References',
+          value: referencesValue
+        });
+        console.log(`GraphService: Setting References: ${referencesValue}`);
+      } else if (threading.inReplyToId) {
+        // If only In-Reply-To is available, use it for References as well
+        internetMessageHeaders.push({
+          name: 'References',
+          value: `<${threading.inReplyToId}>`
+        });
+        console.log(`GraphService: Setting References based on In-Reply-To: <${threading.inReplyToId}>`);
+      }
     }
+    // --- End Construct Threading Headers ---
+
+    // No conversion needed - directly use the provided HTML
+    const htmlContent = messageContent;
 
     // Define the message request structure inline
     const replyMessage = {
@@ -162,7 +221,7 @@ export async function sendEmailReply(
         subject: subject,
         body: {
           contentType: 'HTML',
-          content: htmlBody,
+          content: htmlContent,
         },
         toRecipients: [
           {
@@ -171,56 +230,30 @@ export async function sendEmailReply(
             },
           },
         ],
-        // --- Threading Headers ---
-        // Microsoft Graph API requires custom headers to start with 'X-'
-        internetMessageHeaders: [
-          {
-            name: 'X-In-Reply-To',
-            value: `<${originalMessage.internetMessageId}>`
-          },
-          {
-            name: 'X-References',
-            value: `${(originalMessage.internetMessageHeaders as InternetMessageHeader[] | undefined)?.find(h => h.name === 'References' || h.name === 'X-References')?.value || ''} <${originalMessage.internetMessageId}>`.trim()
-          },
-          {
-            name: 'X-MS-Exchange-ThreadID',
-            value: originalMessage.conversationId || originalMessage.internetMessageId || ''
-          }
-        ],
-        // from: { // Optional: If you need to specify the 'From' address and have permissions
-        //   emailAddress: {
-        //     address: fromEmailAddress
-        //   }
-        // }
+        // Add the constructed standard headers
+        internetMessageHeaders: internetMessageHeaders.length > 0 ? internetMessageHeaders : undefined,
       },
-      saveToSentItems: true, // Or false based on preference
+      saveToSentItems: true,
     };
 
     // Log the reply being sent
     console.log(`GraphService: Attempting to send email reply to ${toEmailAddress} from ${fromEmailAddress} with subject "${subject}"`);
-    console.log(`GraphService: X-In-Reply-To: <${originalMessage.internetMessageId}>`);
-    console.log(`GraphService: X-References: ${replyMessage.message?.internetMessageHeaders?.find(h => h.name === 'X-References')?.value}`);
-
 
     // Use the /sendMail action
-    // Note: The user identified by `userEmail` (or the app registration if using app-only permissions)
-    // must have permissions to send mail. For delegated, userEmail must have a mailbox.
-    // For app permissions, the app needs Mail.Send.
     const response = await graphClient
-      .api(`/users/${fromEmailAddress}/sendMail`) // Send from the shared mailbox
+      .api(`/users/${fromEmailAddress}/sendMail`)
       .post(replyMessage);
 
-    console.log(`GraphService: Email reply sent successfully. Message ID (if available from response): ${response?.id}`);
-    return response as Message; // The sendMail action itself doesn't return the full message object in v1.0 immediately,
-                               // but we can return what we have or indicate success.
+    console.log(`GraphService: Email reply sent successfully. Response indicates success (actual message object not returned by sendMail).`);
+    // sendMail action doesn't return the full message object immediately
+    return { id: 'sent' } as Message; // Return a minimal success indicator
 
   } catch (error: any) {
     console.error('GraphService: Error sending email reply:', JSON.stringify(error, null, 2));
     // More detailed error logging
     if (error.details) console.error('GraphService Error Details:', error.details);
     if (error.code) console.error(`GraphService Error Code: ${error.code}`);
-    // Consider re-throwing or returning a more specific error object
-    return null; // Indicate failure
+    return null;
   }
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios, { AxiosError } from 'axios';
 import { format, formatDistanceToNow } from 'date-fns';
 import Link from 'next/link';
@@ -146,12 +146,66 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
   const [error, setError] = useState<string | null>(null);
   const [newComment, setNewComment] = useState('');
   const [isInternalNote, setIsInternalNote] = useState(false);
-  const [sendAsEmail, setSendAsEmail] = useState(false); // State for the new checkbox
+  const [sendAsEmail, setSendAsEmail] = useState(false);
   const [submitDisabled, setSubmitDisabled] = useState(false);
-  const [files, setFiles] = useState<File[]>([]); // State for file attachments
-  
-  // File input reference
+  const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // --- State for Parsed Shipping Info ---
+  const [extractedStatus, setExtractedStatus] = useState<string | null>(null);
+  const [extractedCarrier, setExtractedCarrier] = useState<string | null>(null);
+  const [extractedTracking, setExtractedTracking] = useState<string | null>(null);
+  const [extractedShipDate, setExtractedShipDate] = useState<string | null>(null);
+  const [extractedOrderDate, setExtractedOrderDate] = useState<string | null>(null);
+
+  // --- Effect to Parse Internal Note ---
+  useEffect(() => {
+    const findAndParseShippingInfo = () => {
+      // Reset state before parsing
+      setExtractedStatus(null);
+      setExtractedOrderDate(null);
+      setExtractedCarrier(null);
+      setExtractedTracking(null);
+      setExtractedShipDate(null);
+
+      const shipStationNote = ticket.comments.find(
+        comment => comment.isInternalNote && comment.commentText?.includes('**ShipStation Info for Order')
+      );
+
+      if (shipStationNote && shipStationNote.commentText) {
+        // Parse Status
+        const statusMatch = shipStationNote.commentText.match(/Status:\s*(\w+)/i);
+        const currentStatus = statusMatch ? statusMatch[1].toLowerCase() : null;
+        setExtractedStatus(currentStatus);
+
+        // Parse Order Date
+        const orderDateMatch = shipStationNote.commentText.match(/Order Date:\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
+        setExtractedOrderDate(orderDateMatch ? orderDateMatch[1] : null);
+
+        // Parse Ship Date (only relevant if shipped)
+        if (currentStatus === 'shipped') {
+            const shipDateMatch = shipStationNote.commentText.match(/Shipped:\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
+            setExtractedShipDate(shipDateMatch ? shipDateMatch[1] : null);
+        }
+
+        // Parse Carrier and Tracking (handle potential variations)
+        // Look for the "Carrier: ..., Tracking: ..." pattern first
+        const carrierTrackingMatch = shipStationNote.commentText.match(/Carrier:\s*([\w\s.-]+?),\s*Tracking:\s*([\w#.-/]+)/i);
+        if (carrierTrackingMatch) {
+            setExtractedCarrier(carrierTrackingMatch[1].trim() || 'Unknown Carrier');
+            setExtractedTracking(carrierTrackingMatch[2].trim());
+        } else {
+            // If not found together, try finding them separately
+            const carrierMatch = shipStationNote.commentText.match(/Carrier:\s*([\w\s.-]+)/i);
+            const trackingMatch = shipStationNote.commentText.match(/Tracking:\s*([\w#.-/]+)/i); // More permissive tracking regex
+            setExtractedCarrier(carrierMatch ? carrierMatch[1].trim() : 'Unknown Carrier');
+            setExtractedTracking(trackingMatch ? trackingMatch[1].trim() : null);
+        }
+      }
+    };
+
+    findAndParseShippingInfo();
+  }, [ticket.comments]); // Re-run only when comments change
 
   // Handle file input change
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -321,7 +375,7 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
   };
 
   // Add this handler function inside the component
-  const handleApproveAndSendDraft = async (draftText: string) => {
+  const handleApproveAndSendDraft = useCallback(async (draftText: string) => {
     if (!ticket.senderEmail) {
       setError("Cannot send email: Original sender email not found for this ticket.");
       return;
@@ -340,6 +394,75 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
       setError('Failed to send the email reply.');
     } finally {
       setSubmitDisabled(false);
+    }
+  }, [ticket.id, ticket.senderEmail, refreshTicket]);
+
+  // --- Function to Generate and Insert Template ---
+  const insertSuggestedResponse = () => {
+    setError(null); // Clear previous errors
+
+    const customerName = ticket.senderName || ticket.reporter?.name || 'Customer';
+    const orderNum = ticket.orderNumber; // Use the ticket's primary order number field
+
+    if (!orderNum) {
+      setError("Cannot generate reply: Ticket is missing the Order Number.");
+      return;
+    }
+
+    let suggestedReply = '';
+    const signature = "Best regards,\n\nAlliance Chemical Shipping Team"; // FIXED Generic Signature
+
+    // --- Template Logic based on Status ---
+    switch (extractedStatus) {
+      case 'shipped':
+        if (!extractedShipDate || !extractedTracking || !extractedCarrier) {
+          setError("Could not find necessary shipped details (Date, Tracking, or Carrier) in internal notes.");
+          console.warn("Missing shipped details:", { extractedShipDate, extractedTracking, extractedCarrier });
+          return;
+        }
+        suggestedReply = `Hi ${customerName},
+
+Thank you for reaching out about order #${orderNum}.
+
+Our records show this order shipped on **${extractedShipDate}** via **${extractedCarrier}** with tracking number **${extractedTracking}**.
+
+Please note that since this shipment occurred some time ago, detailed tracking information might no longer be available on the carrier's website. Packages typically arrive shortly after their ship date.
+
+Could you confirm if this is the correct order number and date you were inquiring about? If you meant a different, more recent order, please provide that number.
+
+Let us know how we can further assist you.
+
+${signature}`;
+        break;
+
+      case 'awaiting_shipment':
+      case 'processing': // Added processing as synonym
+        suggestedReply = `Hi ${customerName},
+
+Thank you for contacting us about order #${orderNum}.
+
+This order is currently processing in our warehouse queue ${extractedOrderDate ? `(placed on ${extractedOrderDate}) ` : ''}and is awaiting shipment. Orders typically ship within 1-3 business days from the order date.
+
+You will receive a separate email with tracking information as soon as it leaves our facility.
+
+Please let us know if you have any other questions in the meantime.
+
+${signature}`;
+        break;
+
+      // Add more cases as needed (e.g., 'on_hold', 'cancelled')
+
+      default:
+        // Fallback if status is unknown or note wasn't parsed correctly
+        setError(`Cannot generate automated reply for status "${extractedStatus || 'Unknown'}". Please write a manual response or check internal notes.`);
+        return; // Don't insert anything
+    }
+
+    // Populate textarea and check email box
+    setNewComment(suggestedReply);
+    if (ticket.senderEmail) {
+        setSendAsEmail(true);
+        setIsInternalNote(false);
     }
   };
 
@@ -531,16 +654,30 @@ export default function TicketViewClient({ initialTicket }: TicketViewClientProp
               {/* Add Comment Form */}
               <form onSubmit={handleCommentSubmit} className="mt-4 border-top pt-3">
                 <div className="mb-3">
-                  <label htmlFor="commentText" className="form-label fw-bold">
-                    Add Reply / Note
-                  </label>
+                  <div className="d-flex justify-content-between align-items-center mb-1">
+                    <label htmlFor="commentText" className="form-label fw-bold">
+                      Add Reply / Note
+                    </label>
+                    {ticket.orderNumber && extractedStatus && ['shipped', 'awaiting_shipment', 'processing'].includes(extractedStatus) && (
+                      <button
+                          type="button"
+                          className="btn btn-sm btn-outline-info"
+                          onClick={insertSuggestedResponse}
+                          title={`Insert ${extractedStatus === 'shipped' ? 'Shipped' : 'Processing'} Status Reply`}
+                          disabled={submitDisabled}
+                      >
+                          <i className="fas fa-reply me-1"></i>
+                          {extractedStatus === 'shipped' ? 'Insert Shipped Reply' : 'Insert Processing Reply'}
+                      </button>
+                    )}
+                  </div>
                   <textarea
                     id="commentText"
                     className="form-control form-control-lg"
-                    rows={5}
+                    rows={8}
                     value={newComment}
-                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setNewComment(e.target.value)}
-                    placeholder="Type your comment here..."
+                    onChange={(e) => setNewComment(e.target.value)}
+                    placeholder="Type your reply or note here..."
                   ></textarea>
                 </div>
 

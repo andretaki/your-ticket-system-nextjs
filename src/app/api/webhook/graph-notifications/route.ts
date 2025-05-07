@@ -106,9 +106,27 @@ export async function POST(request: NextRequest) {
 
     // 2. Handle Actual Notifications
     try {
-        const notificationPayload = await request.json();
-        console.log('Webhook: Received notification'); // Don't log full payload by default
+        // Check if the request has content before attempting to parse JSON
+        const contentType = request.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            console.warn('Webhook: Received request with invalid content type:', contentType);
+            return NextResponse.json({ message: 'Invalid content type' }, { status: 400 });
+        }
 
+        // Get the request body text and verify it's not empty
+        const bodyText = await request.text();
+        if (!bodyText || bodyText.trim() === '') {
+            console.warn('Webhook: Received empty request body');
+            return NextResponse.json({ message: 'Empty request body' }, { status: 202 });
+        }
+
+        // Now safely parse the JSON
+        const notificationPayload = JSON.parse(bodyText);
+        console.log('Webhook: Received notification'); // Don't log full payload by default
+        
+        // Log essential details for debugging
+        console.log(`Webhook: Notification details - Type: ${notificationPayload.changeType || 'N/A'}, Resource count: ${notificationPayload?.value?.length || 0}`);
+        
         if (notificationPayload?.value?.length > 0) {
             for (const notification of notificationPayload.value) {
                 // Verify clientState (Keep this)
@@ -150,6 +168,13 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ message: 'Notification received' }, { status: 202 });
     } catch (error: any) {
         console.error('Webhook: Error processing notification payload:', error);
+        
+        // Add more detailed error info
+        if (error instanceof SyntaxError) {
+            console.error('Webhook: JSON parsing error - likely malformed payload');
+        }
+        
+        // Always return 202 even for errors to prevent Microsoft Graph from deactivating subscription
         return NextResponse.json({ message: 'Error processing notification but accepted' }, { status: 202 });
     }
 } 
