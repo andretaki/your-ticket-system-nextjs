@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db';
-import { tickets, users, ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
+import { tickets, users, ticketPriorityEnum, ticketStatusEnum, ticketSentimentEnum } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
 import { sendTicketReplyEmail, sendNotificationEmail } from '@/lib/email';
@@ -13,6 +13,9 @@ const updateTicketSchema = z.object({
   priority: z.enum(ticketPriorityEnum.enumValues).optional(),
   assigneeEmail: z.string().email().nullable().optional(), // Optional assignee by email
   assigneeId: z.string().nullable().optional(), // Optional assignee by ID
+  sentiment: z.enum(ticketSentimentEnum.enumValues).nullable().optional(), // Optional sentiment
+  ai_summary: z.string().nullable().optional(), // Optional AI summary
+  ai_suggested_assignee_id: z.string().nullable().optional(), // Optional AI suggested assignee
 });
 
 // Helper to parse and validate ticket ID
@@ -46,6 +49,13 @@ export async function GET(
           }
         },
         reporter: {
+          columns: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        aiSuggestedAssignee: {
           columns: {
             id: true,
             name: true,
@@ -106,7 +116,17 @@ export async function PUT(
       return NextResponse.json({ error: "Invalid input", details: errors }, { status: 400 });
     }
     
-    const { title, description, status, priority, assigneeEmail, assigneeId } = validationResult.data;
+    const { 
+      title, 
+      description, 
+      status, 
+      priority, 
+      assigneeEmail, 
+      assigneeId,
+      sentiment,
+      ai_summary,
+      ai_suggested_assignee_id
+    } = validationResult.data;
     
     // Fetch the current ticket state *before* the update to get old assigneeId
     const currentTicket = await db.query.tickets.findFirst({
@@ -131,6 +151,9 @@ export async function PUT(
     if (description) updateData.description = description;
     if (status) updateData.status = status;
     if (priority) updateData.priority = priority;
+    if (sentiment !== undefined) updateData.sentiment = sentiment;
+    if (ai_summary !== undefined) updateData.ai_summary = ai_summary;
+    if (ai_suggested_assignee_id !== undefined) updateData.ai_suggested_assignee_id = ai_suggested_assignee_id;
     
     // Handle assignee - properly handle all the same validation cases as before
     let newAssigneeId = oldAssigneeId; // Default to keeping the old assigneeId

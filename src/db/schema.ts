@@ -15,6 +15,7 @@ export const ticketTypeEcommerceEnum = ticketingProdSchema.enum('ticket_type_eco
     'Return', 'Shipping Issue', 'Order Issue', 'New Order', 'Credit Request',
     'COA Request', 'COC Request', 'SDS Request', 'Quote Request', 'Purchase Order', 'General Inquiry', 'Test Entry'
 ]);
+export const ticketSentimentEnum = ticketingProdSchema.enum('ticket_sentiment_enum', ['positive', 'neutral', 'negative']);
 
 // --- Canned Responses Table ---
 export const cannedResponses = ticketingProdSchema.table('canned_responses', {
@@ -105,6 +106,9 @@ export const tickets = ticketingProdSchema.table('tickets', {
   senderPhone: varchar('sender_phone', { length: 20 }), // Added phone field
   externalMessageId: varchar('external_message_id', { length: 255 }).unique(),
   conversationId: text('conversation_id'), // <-- Added conversationId column (nullable)
+  sentiment: ticketSentimentEnum('sentiment'), // Nullable sentiment
+  ai_summary: text('ai_summary'), // Nullable AI-generated summary
+  ai_suggested_assignee_id: text('ai_suggested_assignee_id').references(() => users.id, { onDelete: 'set null' }), // Nullable suggested assignee ID
 }, (table) => {
   return {
     externalMessageIdKey: unique('tickets_mailgun_message_id_key').on(table.externalMessageId),
@@ -169,9 +173,10 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 
 export const usersRelations = relations(users, ({ many }) => ({
   assignedTickets: many(tickets, { relationName: 'TicketAssignee' }),
+  suggestedTickets: many(tickets, { relationName: 'TicketAiSuggestedAssignee' }), // New relation for AI suggestion
   reportedTickets: many(tickets, { relationName: 'TicketReporter' }),
   comments: many(ticketComments, { relationName: 'UserComments' }),
-  uploadedAttachments: many(ticketAttachments, { relationName: 'AttachmentUploader' }), // Added for attachments
+  uploadedAttachments: many(ticketAttachments, { relationName: 'AttachmentUploader' }),
   accounts: many(accounts),
   sessions: many(sessions),
   reviewedQuarantinedEmails: many(quarantinedEmails),
@@ -187,6 +192,11 @@ export const ticketsRelations = relations(tickets, ({ one, many }) => ({
     fields: [tickets.reporterId],
     references: [users.id],
     relationName: 'TicketReporter',
+  }),
+  aiSuggestedAssignee: one(users, { // New relation for AI suggestion
+    fields: [tickets.ai_suggested_assignee_id],
+    references: [users.id],
+    relationName: 'TicketAiSuggestedAssignee',
   }),
   comments: many(ticketComments),
   attachments: many(ticketAttachments), // Existing relation

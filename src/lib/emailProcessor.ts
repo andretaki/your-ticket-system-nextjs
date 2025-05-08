@@ -3,7 +3,7 @@ import { Message, InternetMessageHeader } from '@microsoft/microsoft-graph-types
 import * as graphService from '@/lib/graphService';
 import * as alertService from '@/lib/alertService';
 import { db } from '@/db';
-import { tickets, users, ticketComments, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum, quarantinedEmails } from '@/db/schema'; // Added quarantinedEmails
+import { tickets, users, ticketComments, ticketPriorityEnum, ticketStatusEnum, ticketTypeEcommerceEnum, quarantinedEmails, ticketSentimentEnum } from '@/db/schema'; // Added sentiment enum
 import { eq, or, inArray, and } from 'drizzle-orm'; // Added and
 import { analyzeEmailContent, triageEmailWithAI } from '@/lib/aiService'; // Import both AI functions
 import { getOrderTrackingInfo, OrderTrackingInfo } from '@/lib/shipstationService'; // Import the new service
@@ -16,6 +16,7 @@ const DEFAULT_STATUS = ticketStatusEnum.enumValues[0];     // 'new'
 const OPEN_STATUS = ticketStatusEnum.enumValues[1];        // 'open' (Used when a reply comes in)
 const PENDING_CUSTOMER_STATUS = ticketStatusEnum.enumValues[3]; // 'pending_customer'
 const DEFAULT_TYPE = 'General Inquiry' as typeof ticketTypeEcommerceEnum.enumValues[number];
+const DEFAULT_SENTIMENT = ticketSentimentEnum.enumValues[1]; // 'neutral'
 
 // --- Types for Hard Rules ---
 type HeaderRule = { type: 'header'; name: string; value: string };
@@ -76,6 +77,71 @@ function parseMessageIdHeader(headerValue: string | null | undefined): string[] 
     }
     // Remove angle brackets and return unique IDs
     return [...new Set(matches.map(id => id.substring(1, id.length - 1)))];
+}
+
+// --- NEW: Assignee Suggestion Mapping ---
+async function mapKeywordsToAssigneeId(keywords: string | null): Promise<string | null> {
+    if (!keywords) return null;
+    const lowerKeywords = keywords.toLowerCase();
+
+    // --- Simple Keyword/Role Mapping (Customize this heavily!) ---
+    const keywordMap: { [key: string]: string | string[] } = {
+        'shipping': ['shipping@alliancechemical.com', 'logistics@alliancechemical.com'], // Assign to one or more emails/IDs
+        'tracking': 'shipping@alliancechemical.com',
+        'billing': 'accounting@alliancechemical.com',
+        'invoice': 'accounting@alliancechemical.com',
+        'payment': 'accounting@alliancechemical.com',
+        'return': ['returns@alliancechemical.com', 'support@alliancechemical.com'],
+        'coa_request': 'qa@alliancechemical.com',
+        'sds_request': 'qa@alliancechemical.com',
+        'coc_request': 'qa@alliancechemical.com',
+        'documentation': 'qa@alliancechemical.com',
+        'technical_support': 'tech@alliancechemical.com',
+        'product_question': 'tech@alliancechemical.com',
+        'sales': 'sales@alliancechemical.com',
+        'quote_request': 'sales@alliancechemical.com',
+    };
+    // --- End Mapping ---
+
+    let targetEmails: string[] = [];
+    for (const key in keywordMap) {
+        if (lowerKeywords.includes(key)) {
+            const targets = keywordMap[key];
+            if (Array.isArray(targets)) {
+                targetEmails.push(...targets);
+            } else {
+                targetEmails.push(targets);
+            }
+            // Optional: break after first match or collect all matches
+            // break;
+        }
+    }
+
+    if (targetEmails.length === 0) return null; // No mapping found
+
+    // Find the first *existing* user from the mapped emails
+    try {
+        // Normalize emails to lower case for query
+        const lowerCaseEmails = targetEmails.map(email => email.toLowerCase());
+        const potentialUsers = await db.query.users.findMany({
+            where: inArray(users.email, lowerCaseEmails),
+            columns: { id: true, email: true } // Fetch email to match later if needed
+        });
+
+        if (potentialUsers.length > 0) {
+            // Prioritize? For now, just take the first one found.
+            const foundUser = potentialUsers.find(u => lowerCaseEmails.includes(u.email));
+            if (foundUser) {
+                console.log(`EmailProcessor (Assignee Suggestion): Mapped "${keywords}" to user ID ${foundUser.id} (${foundUser.email})`);
+                return foundUser.id; // Return the user ID (string UUID)
+            }
+        }
+    } catch (error) {
+        console.error("EmailProcessor (Assignee Suggestion): DB error looking up user:", error);
+    }
+
+    console.log(`EmailProcessor (Assignee Suggestion): No existing user found for keywords "${keywords}" mapped to emails: ${targetEmails.join(', ')}`);
+    return null;
 }
 
 // --- Enhanced Result Interface ---
@@ -374,6 +440,9 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
         const reporterId = await findOrCreateUser(senderEmail, senderName); // Re-confirm user ID
         if (!reporterId) { throw new Error(`User creation failed just before ticket creation for ${senderEmail}`); }
 
+        // --- NEW: Map keywords to Assignee ID ---
+        const suggestedAssigneeId = await mapKeywordsToAssigneeId(analysisResult?.suggestedRoleOrKeywords || null);
+
         let automationAttempted = false;
         let automationInfo: OrderTrackingInfo | null = null;
         let draftReplyContent: string | null = null; // CoA draft
@@ -459,12 +528,13 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
             internalNoteContent += `\n\n---\n\n**${replyLabel}:**\n${draftReplyContent}`;
         }
 
+        // --- Prepare ticket data WITH NEW FIELDS ---
         const ticketData = {
             title: analysisResult?.summary?.substring(0, 255) || subject.substring(0, 255),
             description: fullBody,
             reporterId: reporterId,
             priority: analysisResult?.prioritySuggestion || DEFAULT_PRIORITY,
-            status: ticketStatus, // Use status determined above
+            status: ticketStatus,
             type: (analysisResult?.ticketType && ticketTypeEcommerceEnum.enumValues.includes(analysisResult.ticketType as any))
                   ? analysisResult.ticketType as typeof ticketTypeEcommerceEnum.enumValues[number]
                   : DEFAULT_TYPE,
@@ -474,7 +544,11 @@ export async function processSingleEmail(emailMessage: Message): Promise<Process
             senderName: senderName,
             externalMessageId: internetMessageId || null,
             conversationId: conversationId || null,
-            createdAt: receivedAt, // Use received time for ticket creation
+            createdAt: receivedAt,
+            // --- ADD NEW FIELDS ---
+            sentiment: analysisResult?.sentiment || null, // Default to null if AI doesn't provide it
+            ai_summary: analysisResult?.ai_summary || null,
+            ai_suggested_assignee_id: suggestedAssigneeId, // Store the suggested ID
         };
 
         // Create Ticket and Note

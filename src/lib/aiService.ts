@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold, GenerationConfig } from "@google/generative-ai";
-import { ticketTypeEcommerceEnum, ticketPriorityEnum } from '@/db/schema'; // Import the correct enums
+import { ticketTypeEcommerceEnum, ticketPriorityEnum, ticketSentimentEnum } from '@/db/schema'; // Added sentiment enum
 
 // --- Environment Variable Check ---
 const apiKey = process.env.GOOGLE_API_KEY;
@@ -22,6 +22,7 @@ const model = genAI.getGenerativeModel({
 // Pass these to the AI to guide its response
 const validTicketTypes = ticketTypeEcommerceEnum.enumValues;
 const validPriorities = ticketPriorityEnum.enumValues;
+const validSentiments = ticketSentimentEnum.enumValues; // Add sentiment enum values
 
 // --- NEW: Define Triage Classification Categories ---
 type EmailCategory =
@@ -50,14 +51,16 @@ interface EmailAnalysisResult {
     trackingNumber: string | null;
     lotNumber: string | null; // NEW: Added lot number field
     summary: string; // For ticket title
+    ai_summary: string | null; // NEW: Potentially longer summary for details
     prioritySuggestion: typeof validPriorities[number]; // AI suggests priority
-    sentiment: 'positive' | 'neutral' | 'negative' | null; // Optional sentiment
+    sentiment: typeof validSentiments[number] | null; // UPDATED: Use enum values
     likelyCustomerRequest: boolean; // NEW: AI's assessment
     classificationReason?: string; // NEW: Brief reason for classification
     documentType: 'SDS' | 'COA' | 'COC' | 'OTHER' | null; // NEW: Specific document type requested
     documentRequestConfidence: 'high' | 'medium' | 'low' | null; // NEW: Confidence in document classification
     documentName: string | null; // NEW: Actual name of the requested document if not one of the standard types
     intent: 'order_status_inquiry' | 'tracking_request' | 'return_request' | 'order_issue' | 'documentation_request' | 'quote_request' | 'purchase_order_submission' | 'general_inquiry' | 'other' | null;
+    suggestedRoleOrKeywords: string | null; // NEW: For assignee suggestion
 }
 
 // --- Configure Generation Settings ---
@@ -182,12 +185,13 @@ export async function triageEmailWithAI(subject: string, bodyPreview: string, se
  * @returns A structured analysis result or null if analysis fails.
  */
 export async function analyzeEmailContent(subject: string, body: string): Promise<EmailAnalysisResult | null> {
-    // --- Construct the Prompt ---
+    // --- Construct the Updated Prompt ---
     const prompt = `
         Analyze the following e-commerce customer support email subject and body, known to be a likely customer request, to extract relevant information for a support ticket.
 
         **Valid Ticket Types:** ${validTicketTypes.join(', ')}, Other
         **Valid Priorities:** ${validPriorities.join(', ')}
+        **Valid Sentiments:** ${validSentiments.join(', ')}
         **Valid Intents:** order_status_inquiry, tracking_request, return_request, order_issue, documentation_request, quote_request, purchase_order_submission, general_inquiry, other
         **Document Types:** SDS (Safety Data Sheet), COA (Certificate of Analysis), COC (Certificate of Conformity)
 
@@ -204,14 +208,16 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
         4.  Extract any **trackingNumber**. Return null if none found.
         5.  Extract any **lotNumber**. Look for patterns like LOT12345, Lot: ABCDE, L/N: ..., Lot Number: .... Return null if none found.
         6.  Generate a concise **summary** (max 60 characters) suitable for a ticket title.
-        7.  Suggest a **prioritySuggestion**. Default to "medium" if unsure. Use "high" for clear issues (damaged, missing item) or "urgent" if explicitly stated by the customer.
-        8.  Analyze the overall customer **sentiment** ('positive', 'neutral', 'negative'). Return null if unclear.
-        9.  For documentation requests, determine the specific **documentType** (SDS, COA, COC):
+        7.  Generate an **ai_summary** (max 150 characters) capturing the core request or issue described in the body, especially if the body is long. Return null if the body is very short or uninformative.
+        8.  Suggest a **prioritySuggestion**. Default to "medium" if unsure. Use "high" for clear issues (damaged, missing item) or "urgent" if explicitly stated by the customer.
+        9.  Analyze the overall customer **sentiment** ('positive', 'neutral', 'negative'). Return null if unclear.
+        10. For documentation requests, determine the specific **documentType** (SDS, COA, COC):
             * SDS = Safety Data Sheet, MSDS, Material Safety Data Sheet, safety documentation
             * COA = Certificate of Analysis, Analysis Certificate, Lab Results, Test Results
             * COC = Certificate of Conformity, Certificate of Compliance, Conformity Certificate
             * For any other document type, set documentType to "OTHER" and extract the specific document name into documentName field
             * Provide your confidence level in this determination as "documentRequestConfidence" (high, medium, low)
+        11. Identify keywords or the user role best suited to handle this request (e.g., 'shipping', 'billing', 'coa_request', 'sds_request', 'technical_support', 'sales'). Return this as **suggestedRoleOrKeywords** (string or null).
 
         **Output Format:**
         Return **ONLY** a valid JSON object matching this structure:
@@ -222,20 +228,21 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
           "trackingNumber": "..." | null,
           "lotNumber": "..." | null,
           "summary": "...",
+          "ai_summary": "..." | null,
           "prioritySuggestion": "...",
           "sentiment": "..." | null,
           "documentType": "SDS" | "COA" | "COC" | "OTHER" | null,
           "documentRequestConfidence": "high" | "medium" | "low" | null,
-          "documentName": "..." | null
+          "documentName": "..." | null,
+          "suggestedRoleOrKeywords": "..." | null
         }
     `;
 
     try {
         console.log(`AI Service (Extract): Sending request for subject: "${subject.substring(0, 50)}..."`);
-        // Use original generation config optimized for extraction
         const result = await model.generateContent({
             contents: [{ role: "user", parts: [{ text: prompt }] }],
-            generationConfig, // Original config
+            generationConfig,
             safetySettings,
         });
         const responseText = result.response.text();
@@ -243,59 +250,50 @@ export async function analyzeEmailContent(subject: string, body: string): Promis
             console.error("AI Service Error (Extract): Response empty."); return null;
         }
         const cleanedJson = responseText.replace(/^```json\s*|```$/g, '').trim();
-        let parsedResult: any; // Use 'any' temporarily
+        let parsedResult: any;
         try {
             parsedResult = JSON.parse(cleanedJson);
         } catch (parseError) {
             console.error("AI Service Error (Extract): Failed to parse JSON:", parseError, "\nText:", responseText); return null;
         }
 
-        // Basic validation for extraction result
+        // Basic validation and default setting for core fields
         if (!parsedResult || typeof parsedResult.summary !== 'string' || typeof parsedResult.prioritySuggestion !== 'string') {
-            console.error("AI Service Error (Extract): Invalid structure", parsedResult);
-            // Attempt recovery
-            parsedResult.summary = parsedResult.summary || subject.substring(0,60);
-            parsedResult.prioritySuggestion = validPriorities.includes(parsedResult.prioritySuggestion) ? parsedResult.prioritySuggestion : 'medium';
-            parsedResult.ticketType = validTicketTypes.includes(parsedResult.ticketType) ? parsedResult.ticketType : 'General Inquiry';
-        }
-        // Add back the fields expected by the EmailAnalysisResult interface, setting defaults
-        parsedResult.likelyCustomerRequest = true; // Assume true since triage passed it
-        parsedResult.classificationReason = "Classified as customer request by triage AI."; // Generic reason
-        
-        // Handle the new document type fields
-        if (parsedResult.intent === 'documentation_request') {
-            // Set defaults if not present
-            if (!parsedResult.documentType) {
-                parsedResult.documentType = null;
-            }
-            if (!parsedResult.documentRequestConfidence) {
-                parsedResult.documentRequestConfidence = 'low';
-            }
-            if (!parsedResult.documentName) {
-                parsedResult.documentName = null;
-            }
-            // Auto-assign document type based on ticket type if not already detected
-            if (!parsedResult.documentType && parsedResult.ticketType) {
-                if (parsedResult.ticketType === 'SDS Request') {
-                    parsedResult.documentType = 'SDS';
-                    parsedResult.documentRequestConfidence = 'high';
-                } else if (parsedResult.ticketType === 'COA Request') {
-                    parsedResult.documentType = 'COA';
-                    parsedResult.documentRequestConfidence = 'high';
-                } else if (parsedResult.ticketType === 'COC Request') {
-                    parsedResult.documentType = 'COC';
-                    parsedResult.documentRequestConfidence = 'high';
-                }
-            }
-        } else {
-            // Not a documentation request
-            parsedResult.documentType = null;
-            parsedResult.documentRequestConfidence = null;
-            parsedResult.documentName = null;
+            console.error("AI Service Error (Extract): Invalid structure in parsed JSON:", parsedResult);
+             parsedResult = parsedResult || {}; // Ensure parsedResult is an object
+             parsedResult.summary = parsedResult.summary || subject.substring(0, 60);
+             parsedResult.prioritySuggestion = validPriorities.includes(parsedResult.prioritySuggestion) ? parsedResult.prioritySuggestion : 'medium';
+             parsedResult.ticketType = validTicketTypes.includes(parsedResult.ticketType) ? parsedResult.ticketType : 'General Inquiry';
+             parsedResult.ai_summary = parsedResult.ai_summary || null;
+             parsedResult.sentiment = validSentiments.includes(parsedResult.sentiment) ? parsedResult.sentiment : null;
+             parsedResult.suggestedRoleOrKeywords = parsedResult.suggestedRoleOrKeywords || null;
         }
 
+        // Ensure sentiment is valid or null
+        if (parsedResult.sentiment && !validSentiments.includes(parsedResult.sentiment)) {
+            console.warn(`AI Service Warning (Extract): Invalid sentiment "${parsedResult.sentiment}", defaulting to null.`);
+            parsedResult.sentiment = null;
+        }
+        
+        // --- Add defaults/processing for other fields as before ---
+        parsedResult.likelyCustomerRequest = true;
+        parsedResult.classificationReason = "Classified as customer request by triage AI.";
+        if (parsedResult.intent === 'documentation_request') {
+            if (!parsedResult.documentType) parsedResult.documentType = null;
+            if (!parsedResult.documentRequestConfidence) parsedResult.documentRequestConfidence = 'low';
+            if (!parsedResult.documentName) parsedResult.documentName = null;
+            if (!parsedResult.documentType && parsedResult.ticketType) {
+                if (parsedResult.ticketType === 'SDS Request') { parsedResult.documentType = 'SDS'; parsedResult.documentRequestConfidence = 'high'; }
+                else if (parsedResult.ticketType === 'COA Request') { parsedResult.documentType = 'COA'; parsedResult.documentRequestConfidence = 'high'; }
+                else if (parsedResult.ticketType === 'COC Request') { parsedResult.documentType = 'COC'; parsedResult.documentRequestConfidence = 'high'; }
+            }
+        } else {
+            parsedResult.documentType = null; parsedResult.documentRequestConfidence = null; parsedResult.documentName = null;
+        }
+        // --- End defaults/processing ---
+
         console.log("AI Service (Extract): Successfully parsed extraction:", parsedResult);
-        return parsedResult as EmailAnalysisResult; // Cast back to the specific type
+        return parsedResult as EmailAnalysisResult; // Cast back
 
     } catch (error: any) {
         console.error("AI Service Error (Extract): API call failed:", error.message || error);

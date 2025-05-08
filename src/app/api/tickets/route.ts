@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from 'next/server';
 import { db } from '@/db';
-import { tickets, users, ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
+import { tickets, users, ticketPriorityEnum, ticketStatusEnum, ticketSentimentEnum } from '@/db/schema';
 import { eq, desc, asc, and, or, ilike, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getServerSession } from "next-auth/next";
@@ -19,6 +19,10 @@ const createTicketSchema = z.object({
   // Email-related fields for tickets created from emails
   senderName: z.string().optional(),
   externalMessageId: z.string().optional(),
+  // New AI fields
+  sentiment: z.enum(ticketSentimentEnum.enumValues).nullable().optional(),
+  ai_summary: z.string().nullable().optional(),
+  ai_suggested_assignee_id: z.string().nullable().optional(),
 });
 
 // --- GET: Fetch tickets with filtering and sorting ---
@@ -114,10 +118,14 @@ export async function GET(request: NextRequest) {
         assigneeId: true, // Needed for filtering and relation
         reporterId: true, // Needed for relation
         type: true, // Include ticket type
+        sentiment: true, // Include sentiment
+        ai_summary: true, // Include AI summary
+        ai_suggested_assignee_id: true, // Include AI suggested assignee
       },
       with: {
         assignee: { columns: { id: true, name: true, email: true } }, // Ensure User ID is fetched
-        reporter: { columns: { id: true, name: true, email: true } } // Ensure User ID is fetched
+        reporter: { columns: { id: true, name: true, email: true } }, // Ensure User ID is fetched
+        aiSuggestedAssignee: { columns: { id: true, name: true, email: true } } // Include AI suggested assignee
       },
     });
 
@@ -143,6 +151,12 @@ export async function GET(request: NextRequest) {
       isFromEmail: Boolean(t.externalMessageId),
       orderNumber: t.orderNumber,
       trackingNumber: t.trackingNumber,
+      // Include new AI fields
+      sentiment: t.sentiment,
+      ai_summary: t.ai_summary,
+      ai_suggested_assignee_id: t.ai_suggested_assignee_id,
+      aiSuggestedAssigneeName: t.aiSuggestedAssignee?.name ?? null,
+      aiSuggestedAssigneeEmail: t.aiSuggestedAssignee?.email ?? null,
     }));
 
     return NextResponse.json(responseData);
@@ -181,7 +195,11 @@ export async function POST(request: Request) {
       status,
       senderEmail,
       senderName,
-      externalMessageId
+      externalMessageId,
+      // New AI fields
+      sentiment,
+      ai_summary,
+      ai_suggested_assignee_id
     } = validationResult.data;
 
     // Initialize assigneeId as null (text type in schema)
@@ -212,6 +230,10 @@ export async function POST(request: Request) {
       senderEmail: senderEmail || null,
       senderName: senderName || null,
       externalMessageId: externalMessageId || null,
+      // Include new AI fields
+      sentiment: sentiment || null,
+      ai_summary: ai_summary || null,
+      ai_suggested_assignee_id: ai_suggested_assignee_id || null,
     }).returning();
 
     console.log(`API Info [POST /api/tickets]: Ticket ${newTicket.id} created successfully.`);
