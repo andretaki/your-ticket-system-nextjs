@@ -18,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Issue Tracker',
-  description: 'A modern issue tracker for teams',
+  title: 'Alliance Chemical Ticket System',
+  description: 'Modern ticket management system for Alliance Chemical',
   icons: {
     icon: '/assets/logo.png',
   },
