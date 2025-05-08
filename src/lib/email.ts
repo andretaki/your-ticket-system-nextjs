@@ -81,3 +81,54 @@ export async function sendTicketReplyEmail(options: TicketReplyEmailOptions): Pr
     throw error;
   }
 } 
+
+/**
+ * Options for sending a notification email (not a reply, no threading).
+ */
+interface NotificationEmailOptions {
+  recipientEmail: string;
+  recipientName?: string; // Optional recipient name
+  subject: string;
+  htmlBody: string; // Expect pre-formatted HTML
+  senderName?: string; // Optional sender name display
+}
+
+/**
+ * Sends a generic notification email (NOT a reply, no threading).
+ * @param options The email options.
+ * @returns True if sending was initiated successfully, false otherwise.
+ */
+export async function sendNotificationEmail(options: NotificationEmailOptions): Promise<boolean> {
+  try {
+    const {
+      recipientEmail,
+      recipientName = 'User', // Default name if not provided
+      subject,
+      htmlBody,
+      senderName = 'Ticket System' // Default sender name
+    } = options;
+
+    // Prepare the email content with a simple wrapper
+    const formattedHtml = `
+      <div style="font-family: sans-serif; font-size: 14px;">
+        ${htmlBody}
+        <p>Regards,<br>${senderName}</p>
+      </div>
+    `;
+
+    // Use the existing sendEmailReply function, but without threading information
+    const result = await graphService.sendEmailReply(
+      recipientEmail,
+      subject,
+      formattedHtml,
+      {} // Empty object for no threading info
+    );
+
+    console.log(`NotificationService: Notification email sent successfully to ${recipientEmail}.`);
+    return result !== null;
+
+  } catch (error) {
+    console.error('NotificationService: Error sending notification email:', error);
+    return false; // Indicate failure
+  }
+} 

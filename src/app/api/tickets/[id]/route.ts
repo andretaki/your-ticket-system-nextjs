@@ -3,6 +3,7 @@ import { db } from '@/db';
 import { tickets, users, ticketPriorityEnum, ticketStatusEnum } from '@/db/schema';
 import { eq, and } from 'drizzle-orm';
 import { z } from 'zod';
+import { sendTicketReplyEmail, sendNotificationEmail } from '@/lib/email';
 
 // --- Zod Schema for Validation ---
 const updateTicketSchema = z.object({
@@ -10,7 +11,8 @@ const updateTicketSchema = z.object({
   description: z.string().min(1, { message: "Description is required" }).optional(),
   status: z.enum(ticketStatusEnum.enumValues).optional(),
   priority: z.enum(ticketPriorityEnum.enumValues).optional(),
-  assigneeEmail: z.string().email().nullable().optional(), // Optional assignee
+  assigneeEmail: z.string().email().nullable().optional(), // Optional assignee by email
+  assigneeId: z.string().nullable().optional(), // Optional assignee by ID
 });
 
 // Helper to parse and validate ticket ID
@@ -104,17 +106,23 @@ export async function PUT(
       return NextResponse.json({ error: "Invalid input", details: errors }, { status: 400 });
     }
     
-    const { title, description, status, priority, assigneeEmail } = validationResult.data;
+    const { title, description, status, priority, assigneeEmail, assigneeId } = validationResult.data;
     
-    // Check if ticket exists
-    const existingTicket = await db.query.tickets.findFirst({
+    // Fetch the current ticket state *before* the update to get old assigneeId
+    const currentTicket = await db.query.tickets.findFirst({
       where: eq(tickets.id, ticketId),
-      columns: { id: true }
+      columns: { 
+        id: true, 
+        assigneeId: true, 
+        title: true
+      }
     });
     
-    if (!existingTicket) {
+    if (!currentTicket) {
       return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });
     }
+    
+    const oldAssigneeId = currentTicket.assigneeId;
     
     // Prepare update data
     const updateData: Partial<typeof tickets.$inferInsert> = {};
@@ -124,10 +132,35 @@ export async function PUT(
     if (status) updateData.status = status;
     if (priority) updateData.priority = priority;
     
-    // Handle assignee email if provided
-    if (assigneeEmail !== undefined) {
-      if (assigneeEmail === null) {
+    // Handle assignee - properly handle all the same validation cases as before
+    let newAssigneeId = oldAssigneeId; // Default to keeping the old assigneeId
+    
+    if (assigneeId !== undefined) {
+      if (assigneeId === null) {
         // Explicitly setting to null (unassigning)
+        newAssigneeId = null;
+        updateData.assigneeId = null;
+      } else {
+        // Find user by ID to verify it exists
+        const assignee = await db.query.users.findFirst({
+          where: eq(users.id, assigneeId),
+          columns: { id: true }
+        });
+        
+        if (!assignee) {
+          return NextResponse.json(
+            { error: `Assignee with ID "${assigneeId}" not found` },
+            { status: 404 }
+          );
+        }
+        
+        newAssigneeId = assigneeId;
+        updateData.assigneeId = assigneeId;
+      }
+    } else if (assigneeEmail !== undefined) {
+      if (assigneeEmail === null) {
+        // Explicitly unassigning
+        newAssigneeId = null;
         updateData.assigneeId = null;
       } else {
         // Find user by email
@@ -143,12 +176,70 @@ export async function PUT(
           );
         }
         
+        newAssigneeId = assignee.id;
         updateData.assigneeId = assignee.id;
       }
     }
     
     // Add updated timestamp
     updateData.updatedAt = new Date();
+    
+    // Make sure assigneeId changes are included in the updateData if needed
+    // This ensures we capture unassignment properly too
+    if (newAssigneeId !== oldAssigneeId) {
+      updateData.assigneeId = newAssigneeId;
+    }
+    
+    // --- Start Notification Logic ---
+    let notificationSent = false;
+    
+    // Condition: Send notification if new assignee exists AND is different from old assignee
+    if (newAssigneeId && newAssigneeId !== oldAssigneeId) {
+      console.log(`API Info: Assignee changed for ticket ${ticketId}. Old: ${oldAssigneeId}, New: ${newAssigneeId}. Attempting notification...`);
+      
+      try {
+        // Fetch the new assignee's details
+        const newAssigneeUser = await db.query.users.findFirst({
+          where: eq(users.id, newAssigneeId),
+          columns: { email: true, name: true }
+        });
+        
+        if (newAssigneeUser?.email) {
+          // Construct email content
+          const ticketUrl = `${process.env.NEXT_PUBLIC_APP_URL}/tickets/${ticketId}`;
+          const emailSubject = `Ticket Assigned: #${ticketId} - ${currentTicket.title}`;
+          const emailBody = `
+            <p>Hello ${newAssigneeUser.name || 'User'},</p>
+            <p>You have been assigned ticket #${ticketId}: "${currentTicket.title}".</p>
+            <p>You can view the ticket details here:</p>
+            <p><a href="${ticketUrl}">${ticketUrl}</a></p>
+            <p>Thank you,<br/>Ticket System</p>
+          `;
+          
+          // Send the email using the new notification function
+          const emailSent = await sendNotificationEmail({
+            recipientEmail: newAssigneeUser.email,
+            recipientName: newAssigneeUser.name || undefined,
+            subject: emailSubject,
+            htmlBody: emailBody,
+            senderName: "Ticket System"
+          });
+          
+          if (emailSent) {
+            notificationSent = true;
+            console.log(`API Info: Assignment notification email sent to ${newAssigneeUser.email} for ticket ${ticketId}.`);
+          } else {
+            console.error(`API Error: Failed to send assignment notification email for ticket ${ticketId} to ${newAssigneeUser.email}.`);
+          }
+        } else {
+          console.warn(`API Warning: Could not find email for new assignee ID ${newAssigneeId} on ticket ${ticketId}. Notification not sent.`);
+        }
+      } catch (notificationError) {
+        console.error(`API Error: Exception during assignment notification for ticket ${ticketId}:`, notificationError);
+        // Log but continue with the update - don't fail the ticket update if notification fails
+      }
+    }
+    // --- End Notification Logic ---
     
     // Update the ticket
     const [updatedTicket] = await db
@@ -157,7 +248,7 @@ export async function PUT(
       .where(eq(tickets.id, ticketId))
       .returning();
     
-    console.log(`API Info [PUT /api/tickets/${ticketId}]: Ticket updated successfully.`);
+    console.log(`API Info [PUT /api/tickets/${ticketId}]: Ticket updated successfully. Notification sent: ${notificationSent}`);
     return NextResponse.json(
       { message: 'Ticket updated successfully', ticket: updatedTicket },
       { status: 200 }

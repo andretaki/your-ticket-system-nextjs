@@ -4,25 +4,23 @@
 import React, { useState, useEffect, useCallback, ChangeEvent, FormEvent, useRef } from 'react';
 import axios, { AxiosError } from 'axios';
 import Link from 'next/link';
-import TicketDisplay from './TicketDisplay'; // Remove DisplayTicket import since it's not directly used
+import TicketDisplay from './TicketDisplay';
 import { ticketStatusEnum, ticketPriorityEnum } from '@/db/schema';
 
-// Type matching the flattened response from GET /api/tickets
-// Ensure this matches EXACTLY what your /api/tickets GET endpoint returns per item in the array
 interface TicketListEntry {
   id: number;
   title: string;
   status: string;
   priority: string;
   type?: string | null;
-  createdAt: string; // Comes as ISO string from API
-  updatedAt: string; // Comes as ISO string from API
+  createdAt: string;
+  updatedAt: string;
   assigneeName: string | null;
-  assigneeId: string | null; // User ID is text (UUID)
-  assigneeEmail?: string | null; // Optional, but good to have
+  assigneeId: string | null;
+  assigneeEmail?: string | null;
   reporterName: string | null;
-  reporterId?: string | null; // User ID is text (UUID)
-  reporterEmail?: string | null; // Optional
+  reporterId?: string | null;
+  reporterEmail?: string | null;
   description?: string | null;
   isFromEmail?: boolean;
   orderNumber?: string | null;
@@ -30,23 +28,22 @@ interface TicketListEntry {
 }
 
 interface User {
-  id: string; // User ID is text (UUID) as per your schema
+  id: string;
   name: string | null;
   email: string;
 }
 
 interface TicketListClientProps {
   limit?: number;
-  showSearch?: boolean; // This prop determines if filter/search bar is shown
+  showSearch?: boolean;
 }
 
-// Custom type for our debounce timeout ref that includes the _searchTermPrevious property
 interface DebounceTimeoutRef extends NodeJS.Timeout {}
 
 export default function TicketListClient({ limit, showSearch = true }: TicketListClientProps) {
   const [tickets, setTickets] = useState<TicketListEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(true); // For initial load & full re-fetches
-  const [isApplyingFilters, setIsApplyingFilters] = useState(false); // For button state
+  const [isLoading, setIsLoading] = useState(true);
+  const [isApplyingFilters, setIsApplyingFilters] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<User[]>([]);
 
@@ -66,8 +63,8 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const fetchTickets = useCallback(async () => {
-    if (!isApplyingFilters) setIsLoading(true); // Show full load spinner only if not already applying filters
-    setIsApplyingFilters(true); // Set loading state for the button
+    if (!isApplyingFilters) setIsLoading(true);
+    setIsApplyingFilters(true);
     setError(null);
 
     try {
@@ -82,8 +79,6 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
       const res = await axios.get<TicketListEntry[]>(`/api/tickets?${params.toString()}`);
       let fetchedTickets = res.data;
 
-      // Client-side limit if 'limit' prop is passed (e.g., for dashboard recent tickets)
-      // Ideally, API would handle pagination/limit for the main ticket list page
       if (limit && limit > 0 && !statusFilter && !priorityFilter && !assigneeFilter && !searchTerm.trim()) {
         fetchedTickets = fetchedTickets.slice(0, limit);
       }
@@ -97,40 +92,33 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     }
   }, [statusFilter, priorityFilter, assigneeFilter, searchTerm, sortBy, sortOrder, limit]);
 
-  // Set up real-time updates using Server-Sent Events
   useEffect(() => {
-    // Only set up real-time updates if we're on the main tickets page (not limited view)
-    if (!limit) {
-      // Create EventSource connection
-      const eventSource = new EventSource('/api/tickets/events');
-      eventSourceRef.current = eventSource;
+    const eventSource = new EventSource('/api/tickets/events');
+    eventSourceRef.current = eventSource;
 
-      // Listen for ticket updates
-      eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'ticket_created' || data.type === 'ticket_updated' || data.type === 'ticket_deleted') {
-          fetchTickets();
-        }
-      };
+    eventSource.onmessage = (event) => {
+      console.log('SSE Event Received:', event.data);
+      const data = JSON.parse(event.data);
+      if (data.type === 'ticket_created' || data.type === 'ticket_updated' || data.type === 'ticket_deleted') {
+        fetchTickets();
+      }
+    };
 
-      // Handle connection errors
-      eventSource.onerror = (error) => {
-        console.error('EventSource failed:', error);
-        eventSource.close();
-      };
+    eventSource.onerror = (error) => {
+      console.error('EventSource failed:', error);
+      eventSource.close();
+    };
 
-      return () => {
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-        }
-      };
-    }
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+    };
   }, [fetchTickets, limit]);
 
-  // Initial data load (tickets & users for filters if applicable)
   useEffect(() => {
-    fetchTickets(); // Call fetchTickets directly
-    if (showSearch && !limit) { // Only fetch users if full controls are shown
+    fetchTickets();
+    if (showSearch && !limit) {
       axios.get<User[]>('/api/users')
         .then(res => setUsers(res.data))
         .catch(err => {
@@ -139,11 +127,10 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
         });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on mount
+  }, []);
 
-  // Debounced search
   useEffect(() => {
-    if (!showSearch || limit) return; // Only apply debounced search on the full ticket list page
+    if (!showSearch || limit) return;
     
     if (isInitialMount.current) {
       isInitialMount.current = false;
@@ -155,7 +142,6 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     }
     
     debounceTimeoutRef.current = setTimeout(() => {
-      // Only fetch if search term has actually changed and is not just whitespace
       if (searchTerm !== previousSearchTermRef.current) {
         fetchTickets();
       }
@@ -169,12 +155,11 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     };
   }, [searchTerm, fetchTickets, showSearch, limit]);
 
-
   const deleteTicket = async (id: number) => {
     setError(null);
     try {
       await axios.delete(`/api/tickets/${id}`);
-      fetchTickets(); // Refresh list
+      fetchTickets();
     } catch (err: unknown) {
       console.error('Error deleting ticket:', err);
       let message = 'Failed to delete ticket.';
@@ -201,14 +186,8 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     setPriorityFilter('');
     setAssigneeFilter('');
     setSearchTerm('');
-    setSortBy('createdAt'); // Reset sort
+    setSortBy('createdAt');
     setSortOrder('desc');
-    // Fetch tickets will be triggered by the state changes if `fetchTickets` is in useEffect deps
-    // or call it explicitly if preferred after states are set.
-    // To ensure all states are updated before fetch, it's safer to call fetchTickets in a subsequent useEffect
-    // or pass the reset values directly to a fetch function, but for simplicity:
-    // We'll rely on the useEffect watching searchTerm to trigger a fetch when it's cleared,
-    // and then the explicit fetchTickets call here will use the new empty filter values.
     fetchTickets();
   };
 
@@ -216,108 +195,232 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
     const newSortOrder = sortBy === column && sortOrder === 'asc' ? 'desc' : 'asc';
     setSortBy(column);
     setSortOrder(newSortOrder);
-    // fetchTickets() will be called due to state change in its dependency array
   };
 
   const renderSortIcon = (column: string) => {
-    if (sortBy !== column) return <i className="fas fa-sort text-muted ms-1 opacity-50"></i>;
-    return sortOrder === 'desc' ? <i className="fas fa-sort-down ms-1"></i> : <i className="fas fa-sort-up ms-1"></i>;
+    if (sortBy !== column) return <i className="fa-solid fa-sort text-gray-400 ms-1 opacity-50 text-xs"></i>;
+    return sortOrder === 'desc' 
+      ? <i className="fa-solid fa-sort-down ms-1 text-primary"></i> 
+      : <i className="fa-solid fa-sort-up ms-1 text-primary"></i>;
+  };
+
+  const getPriorityBadgeClass = (priority: string) => {
+    switch (priority) {
+      case 'high': return 'bg-danger';
+      case 'medium': return 'bg-warning text-dark';
+      case 'low': return 'bg-info text-dark';
+      default: return 'bg-secondary';
+    }
+  };
+
+  const getStatusBadgeClass = (status: string) => {
+    switch (status) {
+      case 'open': return 'bg-success';
+      case 'in_progress': return 'bg-primary';
+      case 'resolved': return 'bg-secondary';
+      case 'closed': return 'bg-dark';
+      case 'waiting_on_customer': return 'bg-warning text-dark';
+      default: return 'bg-secondary';
+    }
+  };
+
+  const formatStatus = (status: string) => {
+    return status.replace('_', ' ')
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   };
 
   const shouldShowControls = showSearch && !limit;
 
-  if (isLoading && tickets.length === 0 && !error) { // Only show full page spinner on initial load
-    return <div className="text-center py-5"><div className="spinner-border text-primary" role="status"><span className="visually-hidden">Loading tickets...</span></div></div>;
+  if (isLoading && tickets.length === 0 && !error) {
+    return (
+      <div className="d-flex justify-content-center py-5">
+        <div className="spinner-grow text-primary" role="status" style={{ width: '3rem', height: '3rem' }}>
+          <span className="visually-hidden">Loading tickets...</span>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="card shadow-sm">
-      <div className="card-header bg-light d-flex flex-column flex-md-row justify-content-between align-items-md-center py-2">
-        <h3 className="mb-2 mb-md-0 h5">{limit ? 'Recent Tickets' : 'All Tickets'}</h3>
+    <div className="card border-0 shadow-lg rounded-3 overflow-hidden">
+      <div className="card-header bg-white d-flex flex-column flex-md-row justify-content-between align-items-md-center p-4 border-bottom-0">
+        <h3 className="mb-2 mb-md-0 h5 fw-bold text-primary">
+          {limit ? 'Recent Tickets' : 'All Tickets'}
+        </h3>
         {shouldShowControls && (
-          <Link href="/tickets/create" className="btn btn-success btn-sm">
-            <i className="fas fa-plus me-1"></i> Create New Ticket
+          <Link href="/tickets/create" className="btn btn-primary btn-sm px-4 rounded-pill shadow-sm">
+            <i className="fa-solid fa-plus me-2"></i> Create New Ticket
           </Link>
         )}
       </div>
-      <div className="card-body">
+      <div className="card-body px-4 pb-4">
         {error && (
-          <div className="alert alert-danger alert-dismissible fade show" role="alert">
+          <div className="alert alert-danger alert-dismissible fade show rounded-3 shadow-sm border-0" role="alert">
+            <i className="fa-solid fa-circle-exclamation me-2"></i>
             {error}
             <button type="button" className="btn-close" onClick={() => setError(null)} aria-label="Close"></button>
           </div>
         )}
 
         {shouldShowControls && (
-          <div className="filters-bar mb-4 p-3 border rounded bg-light-subtle">
-            <form onSubmit={handleFilterFormSubmit} className="row g-2 align-items-end">
+          <div className="filters-bar mb-4 p-4 rounded-3 shadow-sm bg-light">
+            <form onSubmit={handleFilterFormSubmit} className="row g-3 align-items-end">
               <div className="col-lg-3 col-md-6 col-12">
-                <label htmlFor="search" className="form-label form-label-sm fw-medium">Search</label>
-                <input
-                  type="text"
-                  id="search"
-                  className="form-control form-control-sm"
-                  placeholder="Title, Desc, Email, Order..."
-                  value={searchTerm}
-                  onChange={handleSearchChange}
-                />
+                <label htmlFor="search" className="form-label form-label-sm fw-medium">
+                  <i className="fa-solid fa-search me-2 text-primary"></i>Search
+                </label>
+                <div className="input-group input-group-sm">
+                  <input
+                    type="text"
+                    id="search"
+                    className="form-control"
+                    placeholder="Search tickets..."
+                    value={searchTerm}
+                    onChange={handleSearchChange}
+                    disabled={isLoading || isApplyingFilters}
+                  />
+                </div>
               </div>
               <div className="col-lg-2 col-md-3 col-sm-6">
-                <label htmlFor="statusFilter" className="form-label form-label-sm fw-medium">Status</label>
-                <select id="statusFilter" className="form-select form-select-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                  <option value="">All</option>
-                  {ticketStatusEnum.enumValues.map(s => (<option key={s} value={s}>{s.replace('_', ' ').charAt(0).toUpperCase() + s.replace('_', ' ').slice(1)}</option>))}
+                <label htmlFor="statusFilter" className="form-label form-label-sm fw-medium">
+                  <i className="fa-solid fa-check-circle me-2 text-primary"></i>Status
+                </label>
+                <select 
+                  id="statusFilter" 
+                  className="form-select form-select-sm" 
+                  value={statusFilter} 
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  disabled={isLoading || isApplyingFilters}
+                >
+                  <option value="">All Statuses</option>
+                  {ticketStatusEnum.enumValues.map(s => (
+                    <option key={s} value={s}>{formatStatus(s)}</option>
+                  ))}
                 </select>
               </div>
               <div className="col-lg-2 col-md-3 col-sm-6">
-                <label htmlFor="priorityFilter" className="form-label form-label-sm fw-medium">Priority</label>
-                <select id="priorityFilter" className="form-select form-select-sm" value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-                  <option value="">All</option>
-                  {ticketPriorityEnum.enumValues.map(p => (<option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>))}
+                <label htmlFor="priorityFilter" className="form-label form-label-sm fw-medium">
+                  <i className="fa-solid fa-flag me-2 text-primary"></i>Priority
+                </label>
+                <select 
+                  id="priorityFilter" 
+                  className="form-select form-select-sm" 
+                  value={priorityFilter} 
+                  onChange={(e) => setPriorityFilter(e.target.value)}
+                  disabled={isLoading || isApplyingFilters}
+                >
+                  <option value="">All Priorities</option>
+                  {ticketPriorityEnum.enumValues.map(p => (
+                    <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
+                  ))}
                 </select>
               </div>
               <div className="col-lg-3 col-md-6 col-12">
-                <label htmlFor="assigneeFilter" className="form-label form-label-sm fw-medium">Assignee</label>
-                <select id="assigneeFilter" className="form-select form-select-sm" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
-                  <option value="">All</option>
+                <label htmlFor="assigneeFilter" className="form-label form-label-sm fw-medium">
+                  <i className="fa-solid fa-user me-2 text-primary"></i>Assignee
+                </label>
+                <select 
+                  id="assigneeFilter" 
+                  className="form-select form-select-sm" 
+                  value={assigneeFilter} 
+                  onChange={(e) => setAssigneeFilter(e.target.value)}
+                  disabled={isLoading || isApplyingFilters}
+                >
+                  <option value="">All Assignees</option>
                   <option value="unassigned">Unassigned</option>
-                  {users.map(user => (<option key={user.id} value={user.id}>{user.name || user.email}</option>))}
+                  {users.map(user => (
+                    <option key={user.id} value={user.id}>{user.name || user.email}</option>
+                  ))}
                 </select>
               </div>
               <div className="col-lg-1 col-md-3 col-sm-6">
-                <button type="submit" className="btn btn-primary btn-sm w-100" disabled={isApplyingFilters}>
-                  {isApplyingFilters ? <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> : <i className="fas fa-filter"></i>}
+                <button 
+                  type="submit" 
+                  className="btn btn-primary btn-sm w-100" 
+                  disabled={isApplyingFilters}
+                >
+                  {isApplyingFilters ? 
+                    <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> : 
+                    <>
+                      <i className="fa-solid fa-filter me-1"></i> Filter
+                    </>
+                  }
                 </button>
               </div>
               <div className="col-lg-1 col-md-3 col-sm-6">
-                <button type="button" className="btn btn-outline-secondary btn-sm w-100" onClick={handleClearFilters} title="Clear Filters" disabled={isApplyingFilters}>
-                  <i className="fas fa-times"></i>
+                <button 
+                  type="button" 
+                  className="btn btn-outline-secondary btn-sm w-100" 
+                  onClick={handleClearFilters} 
+                  title="Clear Filters" 
+                  disabled={isApplyingFilters}
+                >
+                  <i className="fa-solid fa-xmark me-1"></i> Clear
                 </button>
               </div>
             </form>
           </div>
         )}
 
-        <div className="table-responsive">
-          <table className="table table-hover table-striped">
-            <thead className="thead-light">
+        <div className="table-responsive rounded-3 shadow-sm">
+          <table className="table table-hover mb-0">
+            <thead className="table-light">
               <tr>
-                <th onClick={() => handleSort('id')} className="sortable-header">ID{renderSortIcon('id')}</th>
-                <th onClick={() => handleSort('title')} className="sortable-header">Title{renderSortIcon('title')}</th>
-                <th style={{ minWidth: '200px' }}>Description</th>
-                <th onClick={() => handleSort('assignee')} className="sortable-header">Assignee{renderSortIcon('assignee')}</th>
-                <th onClick={() => handleSort('priority')} className="sortable-header">Priority{renderSortIcon('priority')}</th>
-                <th onClick={() => handleSort('status')} className="sortable-header">Status{renderSortIcon('status')}</th>
-                <th onClick={() => handleSort('type')} className="sortable-header">Type{renderSortIcon('type')}</th>
-                <th>Actions</th>
+                <th onClick={() => handleSort('id')} className="sortable-header fw-medium">
+                  <div className="d-flex align-items-center">
+                    <span>ID</span>
+                    {renderSortIcon('id')}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('title')} className="sortable-header fw-medium">
+                  <div className="d-flex align-items-center">
+                    <span>Title</span>
+                    {renderSortIcon('title')}
+                  </div>
+                </th>
+                <th style={{ minWidth: '200px' }} className="fw-medium">Description</th>
+                <th onClick={() => handleSort('assignee')} className="sortable-header fw-medium">
+                  <div className="d-flex align-items-center">
+                    <span>Assignee</span>
+                    {renderSortIcon('assignee')}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('priority')} className="sortable-header fw-medium">
+                  <div className="d-flex align-items-center">
+                    <span>Priority</span>
+                    {renderSortIcon('priority')}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('status')} className="sortable-header fw-medium">
+                  <div className="d-flex align-items-center">
+                    <span>Status</span>
+                    {renderSortIcon('status')}
+                  </div>
+                </th>
+                <th onClick={() => handleSort('type')} className="sortable-header fw-medium">
+                  <div className="d-flex align-items-center">
+                    <span>Type</span>
+                    {renderSortIcon('type')}
+                  </div>
+                </th>
+                <th className="fw-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {isApplyingFilters && tickets.length > 0 ? ( // Show small spinner overlay during filter application
-                <tr><td colSpan={8} className="text-center py-4"><div className="spinner-border spinner-border-sm text-muted" role="status"><span className="visually-hidden">Filtering...</span></div></td></tr>
+              {isApplyingFilters && tickets.length > 0 ? (
+                <tr>
+                  <td colSpan={8} className="text-center py-4">
+                    <div className="spinner-border spinner-border-sm text-primary" role="status">
+                      <span className="visually-hidden">Filtering...</span>
+                    </div>
+                  </td>
+                </tr>
               ) : !isLoading && tickets.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center text-muted py-4 fst-italic">
+                  <td colSpan={8} className="text-center text-muted py-5 fst-italic">
+                    <i className="fa-solid fa-ticket-simple me-2 opacity-50"></i>
                     No tickets match the current filters.
                   </td>
                 </tr>
@@ -327,7 +430,7 @@ export default function TicketListClient({ limit, showSearch = true }: TicketLis
                     key={ticket.id}
                     ticket={{
                       ...ticket,
-                      createdAt: new Date(ticket.createdAt), // Ensure Date objects for DisplayTicket
+                      createdAt: new Date(ticket.createdAt),
                       updatedAt: new Date(ticket.updatedAt),
                     }}
                     deleteTicket={deleteTicket}

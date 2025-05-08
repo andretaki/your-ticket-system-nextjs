@@ -25,7 +25,7 @@ const ProcessEmailsSidebarButton: React.FC = () => {
     <button 
       onClick={processEmails} 
       disabled={isProcessing}
-      className="btn btn-sm btn-outline-primary w-100 mt-2"
+      className="btn btn-primary w-100"
       title="Process new emails into tickets"
     >
       {isProcessing ? (

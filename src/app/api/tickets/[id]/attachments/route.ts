@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
-import { ticketAttachments, tickets } from '@/db/schema';
+import { ticketAttachments, tickets, users } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { getServerSession } from 'next-auth';
-import { authOptions } from '@/app/api/auth/[...nextauth]/route';
+import { authOptions } from '@/lib/authOptions';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -50,7 +50,7 @@ export async function POST(
 
     // Get the user who is uploading the files
     const user = await db.query.users.findFirst({
-      where: eq(db.schema.users.email, session.user.email),
+      where: eq(users.email, session.user.email),
     });
 
     if (!user) {

@@ -16,6 +16,17 @@ export const ticketTypeEcommerceEnum = ticketingProdSchema.enum('ticket_type_eco
     'COA Request', 'COC Request', 'SDS Request', 'Quote Request', 'Purchase Order', 'General Inquiry', 'Test Entry'
 ]);
 
+// --- Canned Responses Table ---
+export const cannedResponses = ticketingProdSchema.table('canned_responses', {
+  id: serial('id').primaryKey(),
+  title: varchar('title', { length: 100 }).notNull().unique(), // Short title for selection
+  content: text('content').notNull(), // The actual response text/HTML
+  category: varchar('category', { length: 50 }), // Optional categorization
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdById: text('created_by_id').references(() => users.id), // Optional: track who created it
+});
+
 // --- Auth.js Tables (within ticketing_prod schema) ---
 export const users = ticketingProdSchema.table('users', {
   id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()), // User ID is TEXT (UUID)

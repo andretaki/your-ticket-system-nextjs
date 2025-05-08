@@ -24,10 +24,6 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-i {
-  margin-right: 5px;
-}
-
 td {
   max-width: 250px;
 }
@@ -35,12 +31,17 @@ td {
 .navbar {
   padding: 15px 10px;
   background: #fff;
-  margin-bottom: 40px;
   box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .nav-link {
   outline: none;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+.nav-link i, .btn i {
+  margin-right: 0.35rem;
 }
 
 /* ---------------------------------------------------
@@ -50,7 +51,7 @@ td {
 .wrapper {
   display: flex;
   width: 100%;
-  align-items: stretch;
+  min-height: calc(100vh - 70px);
 }
 
 .sidebar {
@@ -78,6 +79,7 @@ td {
   width: 100%;
   padding: 20px;
   min-height: 100vh;
+  background-color: var(--bs-gray-100);
 }
 
 .low-priority {
@@ -207,4 +209,107 @@ td {
   .bg-success-subtle {
     background-color: #0c2a12 !important;
   }
+}
+
+/* ---------------------------------------------------
+  OUTLOOK-STYLE TICKET VIEW
+----------------------------------------------------- */
+
+/* Main layout styles */
+.ticket-view-outlook {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Fixed header height for calculations */
+.ticket-header-bar {
+  height: 60px;
+  z-index: 100;
+}
+
+/* Main content area that fills remaining height */
+.ticket-main-content {
+  height: calc(100vh - 60px);
+}
+
+/* Left side (communication pane) */
+.communication-pane {
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 100px;
+}
+
+/* Right side (details sidebar) */
+.details-sidebar {
+  height: 100%;
+  overflow-y: auto;
+  background-color: #f8f9fa;
+  border-left: 1px solid #dee2e6;
+  padding-bottom: 100px;
+}
+
+/* Message styling for Outlook-like appearance */
+.message-item {
+  background-color: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.message-header {
+  background-color: #f8f9fa;
+}
+
+.avatar-icon {
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+/* Reply form styling */
+.reply-form-container {
+  background-color: #fff;
+  box-shadow: 0 -1px 5px rgba(0,0,0,0.05);
+}
+
+/* Responsive adjustments */
+@media (max-width: 992px) {
+  .ticket-view-outlook {
+    height: auto;
+    overflow: visible;
+  }
+  
+  .ticket-main-content {
+    height: auto;
+    overflow: visible;
+  }
+  
+  .communication-pane,
+  .details-sidebar {
+    height: auto;
+    overflow: visible;
+    max-height: none;
+  }
+  
+  .ticket-header-bar {
+    position: relative;
+  }
+}
+
+/* Custom scrollbar for the panes */
+.communication-pane::-webkit-scrollbar,
+.details-sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.communication-pane::-webkit-scrollbar-track,
+.details-sidebar::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+.communication-pane::-webkit-scrollbar-thumb,
+.details-sidebar::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+.communication-pane::-webkit-scrollbar-thumb:hover,
+.details-sidebar::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
 }

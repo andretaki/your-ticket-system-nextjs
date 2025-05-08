@@ -6,8 +6,14 @@ import axios from 'axios';
 interface ProcessingResult {
   message: string;
   processed: number;
+  commentAdded: number;
   errors: number;
+  skipped: number;
+  discarded: number;
+  quarantined: number;
   errorDetails?: string[];
+  automationAttempts: number;
+  automationSuccess: number;
 }
 
 const EmailProcessingButton: React.FC = () => {
@@ -71,8 +77,49 @@ const EmailProcessingButton: React.FC = () => {
               <strong>Result:</strong> {result.message}
             </div>
             
+            {result.processed > 0 || result.commentAdded > 0 || result.discarded > 0 || result.quarantined > 0 && (
+              <div className="mt-3 d-flex flex-wrap gap-2">
+                {result.processed > 0 && (
+                  <div className="badge bg-success fs-6 p-2">
+                    {result.processed} New Ticket{result.processed !== 1 ? 's' : ''}
+                  </div>
+                )}
+                {result.commentAdded > 0 && (
+                  <div className="badge bg-info fs-6 p-2">
+                    {result.commentAdded} Comment{result.commentAdded !== 1 ? 's' : ''} Added
+                  </div>
+                )}
+                {result.discarded > 0 && (
+                  <div className="badge bg-secondary fs-6 p-2">
+                    {result.discarded} Discarded
+                  </div>
+                )}
+                {result.quarantined > 0 && (
+                  <div className="badge bg-warning text-dark fs-6 p-2">
+                    {result.quarantined} Quarantined
+                  </div>
+                )}
+                {result.skipped > 0 && (
+                  <div className="badge bg-light text-dark fs-6 p-2">
+                    {result.skipped} Skipped
+                  </div>
+                )}
+                {result.errors > 0 && (
+                  <div className="badge bg-danger fs-6 p-2">
+                    {result.errors} Error{result.errors !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {result.automationAttempts > 0 && (
+              <div className="mt-2 small text-muted">
+                Automation: {result.automationSuccess}/{result.automationAttempts} successful
+              </div>
+            )}
+            
             {result.errors > 0 && result.errorDetails && result.errorDetails.length > 0 && (
-              <div className="mt-2">
+              <div className="mt-3">
                 <h6>Error Details:</h6>
                 <ul className="list-group">
                   {result.errorDetails.map((detail, index) => (

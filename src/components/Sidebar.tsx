@@ -74,8 +74,10 @@ export default function Sidebar() {
                         </li>
                         
                         {/* Email Processing Button for all authenticated users */}
-                        <li className="nav-item px-3">
-                            <ProcessEmailsSidebarButton />
+                        <li className="nav-item px-3 mt-2 mb-2"> {/* Add some margin */}
+                            <div className="d-grid"> {/* Make button take full width available in padding */}
+                                <ProcessEmailsSidebarButton />
+                            </div>
                         </li>
 
                         {/* Admin Specific Links */}
